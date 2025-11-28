@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Log files
+*.log
+
+# Environment variables
+.env
+
+# Local development tools
+bin/shellcheck
+bin/shfmt
