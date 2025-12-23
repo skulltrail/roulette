@@ -1,0 +1,29 @@
+name: roulette
+help: Play random video files from a directory
+version: "1.0.0"
+environment_variables:
+  - name: ROULETTE_DEBUG
+    help: Enable debug mode (any non-empty value)
+  - name: MPV_GEOMETRY
+    help: Set mpv window geometry (e.g., '+0+0')
+  - name: MPV_VOLUME
+    help: Set mpv volume (0-100)
+commands:
+  - name: run
+    help: Play random video files
+    flags:
+      - long: --debug
+        short: -d
+        help: Enable debug mode (show mpv command)
+      - long: --save-played
+        short: -s
+        help: Save played files to omit in future runs
+      - long: --played-file
+        short: -p
+        arg: path
+        help: Path to the played files store (used with --save-played)
+        default: "${HOME}/.roulette_played"
+    args:
+      - name: directory
+        help: Path to search for video files
+        required: false
