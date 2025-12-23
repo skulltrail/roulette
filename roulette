@@ -12,7 +12,7 @@ fi
 
 # :command.version_command
 version_command() {
-  echo "${version}"
+  echo "$version"
 }
 
 # :command.usage
@@ -30,7 +30,7 @@ roulette_usage() {
   echo
 
   # :command.long_usage
-  if [[ -n "${long_usage}" ]]; then
+  if [[ -n "$long_usage" ]]; then
     # :command.usage_options
     printf "%s\n" "Options:"
 
@@ -73,7 +73,7 @@ roulette_run_usage() {
   echo
 
   # :command.long_usage
-  if [[ -n "${long_usage}" ]]; then
+  if [[ -n "$long_usage" ]]; then
     # :command.usage_options
     printf "%s\n" "Options:"
 
@@ -118,24 +118,24 @@ normalize_input() {
 
   while [[ $# -gt 0 ]]; do
     arg="$1"
-    if [[ ${passthru} == true ]]; then
-      input+=("${arg}")
-    elif [[ ${arg} =~ ^(--[a-zA-Z0-9_\-]+)=(.+)$ ]]; then
+    if [[ $passthru == true ]]; then
+      input+=("$arg")
+    elif [[ $arg =~ ^(--[a-zA-Z0-9_\-]+)=(.+)$ ]]; then
       input+=("${BASH_REMATCH[1]}")
       input+=("${BASH_REMATCH[2]}")
-    elif [[ ${arg} =~ ^(-[a-zA-Z0-9])=(.+)$ ]]; then
+    elif [[ $arg =~ ^(-[a-zA-Z0-9])=(.+)$ ]]; then
       input+=("${BASH_REMATCH[1]}")
       input+=("${BASH_REMATCH[2]}")
-    elif [[ ${arg} =~ ^-([a-zA-Z0-9][a-zA-Z0-9]+)$ ]]; then
+    elif [[ $arg =~ ^-([a-zA-Z0-9][a-zA-Z0-9]+)$ ]]; then
       flags="${BASH_REMATCH[1]}"
       for ((i = 0; i < ${#flags}; i++)); do
         input+=("-${flags:i:1}")
       done
-    elif [[ "${arg}" == "--" ]]; then
+    elif [[ "$arg" == "--" ]]; then
       passthru=true
-      input+=("${arg}")
+      input+=("$arg")
     else
-      input+=("${arg}")
+      input+=("$arg")
     fi
 
     shift
@@ -147,30 +147,30 @@ inspect_args() {
   local k
 
   if ((${#args[@]})); then
-    readarray -t sorted_keys < <(printf '%s\n' "${!args[@]}" | sort) || true
+    readarray -t sorted_keys < <(printf '%s\n' "${!args[@]}" | sort)
     echo args:
     for k in "${sorted_keys[@]}"; do
-      echo "- \${args[${k}]} = ${args[${k}]}"
+      echo "- \${args[$k]} = ${args[$k]}"
     done
   else
     echo args: none
   fi
 
   if ((${#deps[@]})); then
-    readarray -t sorted_keys < <(printf '%s\n' "${!deps[@]}" | sort) || true
+    readarray -t sorted_keys < <(printf '%s\n' "${!deps[@]}" | sort)
     echo
     echo deps:
     for k in "${sorted_keys[@]}"; do
-      echo "- \${deps[${k}]} = ${deps[${k}]}"
+      echo "- \${deps[$k]} = ${deps[$k]}"
     done
   fi
 
   if ((${#env_var_names[@]})); then
-    readarray -t sorted_names < <(printf '%s\n' "${env_var_names[@]}" | sort) || true
+    readarray -t sorted_names < <(printf '%s\n' "${env_var_names[@]}" | sort)
     echo
     echo "environment variables:"
     for k in "${sorted_names[@]}"; do
-      echo "- \$${k} = ${!k:-}"
+      echo "- \$$k = ${!k:-}"
     done
   fi
 }
@@ -180,6 +180,7 @@ inspect_args() {
 roulette_run_command() {
 
   # src/run_command.sh
+  # shellcheck disable=SC2154  # GREEN, NC, ICON, version defined in initialize.sh
   echo -e "${GREEN}"
   print_logo
   echo "   r o u l e t t e"
@@ -226,7 +227,7 @@ roulette_run_command() {
         continue
       fi
       videos+=("${file}")
-    done < <(list_videos) || true
+    done < <(list_videos)
 
     if [[ ${#videos[@]} -eq 0 ]]; then
       echo "No unplayed video files found in: ${DIRECTORY_PATH}"
@@ -239,10 +240,7 @@ roulette_run_command() {
     echo -e "${ICON} Playing: ${random_video}"
 
     local video_path
-    video_path=$(
-      set -e
-      convert_path_for_mpv "${random_video}"
-    )
+    video_path=$(convert_path_for_mpv "${random_video}")
     run_mpv "${video_path}"
 
     if [[ -n "${args['--save-played']}" ]]; then
@@ -265,10 +263,7 @@ roulette_run_command() {
             ;;
           r | R)
             echo "Replaying video: ${random_video}"
-            video_path=$(
-              set -e
-              convert_path_for_mpv "${random_video}"
-            )
+            video_path=$(convert_path_for_mpv "${random_video}")
             run_mpv "${video_path}"
             continue
             ;;
@@ -280,10 +275,7 @@ roulette_run_command() {
               echo
               case "${replay_input}" in
                 r | R)
-                  video_path=$(
-                    set -e
-                    convert_path_for_mpv "${random_video}"
-                  )
+                  video_path=$(convert_path_for_mpv "${random_video}")
                   run_mpv "${video_path}"
                   ;;
                 b | B | q | Q | $'\n' | "")
@@ -361,7 +353,7 @@ parse_requirements() {
   # :command.fixed_flags_filter
   while [[ $# -gt 0 ]]; do
     key="$1"
-    case "${key}" in
+    case "$key" in
       --version | -v)
         version_command
         exit
@@ -389,7 +381,7 @@ parse_requirements() {
   # :command.command_filter
   action=${1:-}
 
-  case ${action} in
+  case $action in
     -*) ;;
 
     run)
@@ -406,7 +398,7 @@ parse_requirements() {
       ;;
 
     *)
-      printf "invalid command: %s\n" "${action}" >&2
+      printf "invalid command: %s\n" "$action" >&2
       exit 1
       ;;
 
@@ -415,17 +407,17 @@ parse_requirements() {
   # :command.parse_requirements_while
   while [[ $# -gt 0 ]]; do
     key="$1"
-    case "${key}" in
+    case "$key" in
 
       -?*)
-        printf "invalid option: %s\n" "${key}" >&2
+        printf "invalid option: %s\n" "$key" >&2
         exit 1
         ;;
 
       *)
         # :command.parse_requirements_case
         # :command.parse_requirements_case_simple
-        printf "invalid argument: %s\n" "${key}" >&2
+        printf "invalid argument: %s\n" "$key" >&2
         exit 1
 
         ;;
@@ -442,7 +434,7 @@ roulette_run_parse_requirements() {
   # :command.fixed_flags_filter
   while [[ $# -gt 0 ]]; do
     key="$1"
-    case "${key}" in
+    case "$key" in
       --help | -h)
         long_usage=yes
         roulette_run_usage
@@ -462,7 +454,7 @@ roulette_run_parse_requirements() {
   # :command.parse_requirements_while
   while [[ $# -gt 0 ]]; do
     key="$1"
-    case "${key}" in
+    case "$key" in
       # :flag.case
       --debug | -d)
 
@@ -494,7 +486,7 @@ roulette_run_parse_requirements() {
         ;;
 
       -?*)
-        printf "invalid option: %s\n" "${key}" >&2
+        printf "invalid option: %s\n" "$key" >&2
         exit 1
         ;;
 
@@ -506,7 +498,7 @@ roulette_run_parse_requirements() {
           args['directory']=$1
           shift
         else
-          printf "invalid argument: %s\n" "${key}" >&2
+          printf "invalid argument: %s\n" "$key" >&2
           exit 1
         fi
 
@@ -530,6 +522,7 @@ initialize() {
 
   GREEN='\033[1;32m'
   NC='\033[0m'
+  # shellcheck disable=SC2034  # Used in command.sh
   ICON="${GREEN}(::X::)${NC}"
 
   VIDEO_EXTENSIONS=(
@@ -692,10 +685,7 @@ EOF
   run_mpv() {
     local video_path="$1"
     local mpv_args
-    mpv_args=$(
-      set -e
-      build_mpv_args
-    )
+    mpv_args=$(build_mpv_args)
 
     if [[ -n "${ROULETTE_DEBUG}" || -n "${args['--debug']}" ]]; then
       echo -e "${GREEN}[DEBUG]${NC} ${MPV_PATH} ${mpv_args} \"${video_path}\""
@@ -742,6 +732,7 @@ EOF
     PLAYED_SET=()
     if [[ -f "${PLAYED_SET_FILE}" ]]; then
       while IFS= read -r line; do
+        # shellcheck disable=SC2034  # PLAYED_SET used in command.sh
         [[ -n "${line}" ]] && PLAYED_SET["${line}"]=1
       done <"${PLAYED_SET_FILE}"
     fi
@@ -772,10 +763,10 @@ run() {
   normalize_input "$@"
   parse_requirements "${input[@]}"
 
-  case "${action}" in
+  case "$action" in
     "run") roulette_run_command ;;
     *)
-      echo "Unknown action: ${action}" >&2
+      echo "Unknown action: $action" >&2
       exit 1
       ;;
   esac

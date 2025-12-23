@@ -4,7 +4,7 @@
 echo -e "${GREEN}"
 print_logo
 echo "   r o u l e t t e"
-echo "   Version 2.0"
+echo "   Version 1.0.0"
 echo ""
 echo -e "${NC}"
 

@@ -6,8 +6,15 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
+# Get script directory using realpath for robustness
+if command -v realpath >/dev/null 2>&1; then
+  SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+  SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
+else
+  # Fallback for systems without realpath
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+fi
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 BIN_DIR="${REPO_ROOT}/bin"
 
 # Colors for output

@@ -177,8 +177,34 @@ make all           # Run all checks and tests
 
 ### Running Tests
 
-To run the test suite:
+Roulette includes a comprehensive test suite using BATS (Bash Automated Testing System).
+
+**Prerequisites:**
 
 ```bash
-make test
+# macOS
+brew install bats-core
+
+# Linux
+sudo apt-get install bats
 ```
+
+**Run tests:**
+
+```bash
+make test          # Run legacy shell tests
+make test-bats     # Run comprehensive BATS test suite
+make test-all      # Run all tests
+```
+
+The BATS test suite includes 62+ tests covering:
+
+- Help and version commands
+- Directory validation and video discovery
+- Save-played feature and tracking
+- Interactive menu options
+- Environment variable configuration
+- Error handling and edge cases
+- Cross-platform functionality
+
+For detailed test documentation, see [tests/README.md](tests/README.md).

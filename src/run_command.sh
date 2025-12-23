@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # shellcheck disable=SC2154  # GREEN, NC, ICON, version defined in initialize.sh
 echo -e "${GREEN}"
 print_logo

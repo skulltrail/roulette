@@ -1,0 +1,4 @@
+
+# Local development tools
+bin/shellcheck
+bin/shfmt

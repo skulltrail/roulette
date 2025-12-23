@@ -1,0 +1,13 @@
+# ShellCheck configuration for roulette project
+# https://github.com/koalaman/shellcheck/wiki/Directive
+
+# Disable style-only warnings
+disable=SC2250  # Prefer braces around variables (style preference)
+
+# Keep these as info (they're already suppressed appropriately in code)
+# SC2310: function invoked in if condition (set -e disabled)
+# SC2311: set -e disabled in command substitution
+# SC2312: command in process substitution may mask return value
+
+# Severity: only fail on warning or error, not info/style
+# Use: shellcheck -S warning
