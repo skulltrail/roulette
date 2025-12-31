@@ -131,16 +131,22 @@ install_shfmt() {
 install_ruby_deps() {
   info "Checking Ruby dependencies..."
 
+  # Skip bashly installation in CI - it's only needed for building, not for lint/test
+  if [[ -n "${CI:-}" ]]; then
+    info "CI environment detected, skipping bashly installation (not needed for lint/test)"
+    return 0
+  fi
+
   if ! command -v ruby &>/dev/null; then
     warn "Ruby not found. Please install Ruby to use bashly for development."
     warn "  macOS: brew install ruby"
     warn "  Linux: apt install ruby / dnf install ruby"
-    return 1
+    return 0 # Don't fail setup, just warn
   fi
 
   if ! command -v gem &>/dev/null; then
     warn "RubyGems not found. Please ensure Ruby is properly installed."
-    return 1
+    return 0 # Don't fail setup, just warn
   fi
 
   local ruby_version
@@ -154,7 +160,9 @@ install_ruby_deps() {
     # Install erb gem (required for Ruby 4.0+ where it was extracted from stdlib)
     if ! gem list -i "^erb$" &>/dev/null; then
       info "Installing erb gem (required for Ruby 4.x)..."
-      gem install erb -v '~> 4.0' || gem install erb
+      gem install --user-install erb -v '~> 4.0' || gem install --user-install erb || {
+        warn "Failed to install erb gem. You may need to install it manually."
+      }
     else
       info "erb gem already installed"
     fi
@@ -163,11 +171,18 @@ install_ruby_deps() {
   # Install bashly (use version compatible with Ruby 4.0 if needed)
   if ! gem list -i bashly &>/dev/null; then
     info "Installing bashly gem..."
+    # Try --user-install first to avoid permission issues
     if [[ "${ruby_version}" == 4.* ]]; then
       # Ruby 4.0: filewatcher 2.x doesn't support Ruby 4.0, use older bashly
-      gem install bashly -v '< 1.0' || gem install bashly
+      gem install --user-install bashly -v '< 1.0' || gem install --user-install bashly || {
+        warn "Failed to install bashly. You may need to install it manually: gem install bashly"
+        return 0 # Don't fail setup, just warn
+      }
     else
-      gem install bashly
+      gem install --user-install bashly || {
+        warn "Failed to install bashly. You may need to install it manually: gem install bashly"
+        return 0 # Don't fail setup, just warn
+      }
     fi
   else
     info "bashly gem already installed"

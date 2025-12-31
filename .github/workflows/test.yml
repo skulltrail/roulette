@@ -36,11 +36,8 @@ jobs:
       - name: Run format check
         run: make format-check
 
-      - name: Run legacy tests
+      - name: Run tests
         run: make test
-
-      - name: Run BATS tests
-        run: make test-bats
 
       - name: Upload test results
         if: always()
