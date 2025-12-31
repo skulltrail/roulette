@@ -127,6 +127,55 @@ install_shfmt() {
   info "shfmt installed successfully"
 }
 
+# Install Ruby dependencies (bashly and its gems)
+install_ruby_deps() {
+  info "Checking Ruby dependencies..."
+
+  if ! command -v ruby &>/dev/null; then
+    warn "Ruby not found. Please install Ruby to use bashly for development."
+    warn "  macOS: brew install ruby"
+    warn "  Linux: apt install ruby / dnf install ruby"
+    return 1
+  fi
+
+  if ! command -v gem &>/dev/null; then
+    warn "RubyGems not found. Please ensure Ruby is properly installed."
+    return 1
+  fi
+
+  local ruby_version
+  ruby_version=$(ruby -e 'puts RUBY_VERSION')
+
+  # Ruby 4.0+ compatibility: some gems were extracted from stdlib
+  if [[ "${ruby_version}" == 4.* ]]; then
+    warn "Ruby 4.0 detected. Some bashly dependencies may have compatibility issues."
+    warn "If you encounter problems, consider using Ruby 3.x for development."
+
+    # Install erb gem (required for Ruby 4.0+ where it was extracted from stdlib)
+    if ! gem list -i "^erb$" &>/dev/null; then
+      info "Installing erb gem (required for Ruby 4.x)..."
+      gem install erb -v '~> 4.0' || gem install erb
+    else
+      info "erb gem already installed"
+    fi
+  fi
+
+  # Install bashly (use version compatible with Ruby 4.0 if needed)
+  if ! gem list -i bashly &>/dev/null; then
+    info "Installing bashly gem..."
+    if [[ "${ruby_version}" == 4.* ]]; then
+      # Ruby 4.0: filewatcher 2.x doesn't support Ruby 4.0, use older bashly
+      gem install bashly -v '< 1.0' || gem install bashly
+    else
+      gem install bashly
+    fi
+  else
+    info "bashly gem already installed"
+  fi
+
+  info "Ruby dependencies installed successfully"
+}
+
 # Install commitlint (using a simple bash implementation to avoid Node.js dependency)
 install_commit_hooks() {
   info "Setting up git hooks..."
@@ -303,6 +352,7 @@ main() {
   setup_dirs
   install_shellcheck
   install_shfmt
+  install_ruby_deps
   install_commit_hooks
   update_gitignore
 
@@ -312,6 +362,7 @@ main() {
   echo "Installed tools:"
   echo "  - shellcheck: ${BIN_DIR}/shellcheck"
   echo "  - shfmt: ${BIN_DIR}/shfmt"
+  echo "  - bashly: $(command -v bashly 2>/dev/null || echo 'not installed')"
   echo ""
   echo "Git hooks installed:"
   echo "  - pre-commit: Runs shellcheck and shfmt on staged shell scripts"

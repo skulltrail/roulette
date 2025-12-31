@@ -1,35 +1,40 @@
-.PHONY: all test lint format check setup help
+.PHONY: all test lint format check setup build help
 
 SHELL := /bin/bash
 BIN_DIR := bin
 SHELLCHECK := $(BIN_DIR)/shellcheck
 SHFMT := $(BIN_DIR)/shfmt
+SRC_DIR := src
 
 # Shell files to check (filter out non-existent files)
-SHELL_FILES := $(wildcard scripts/*.sh) $(wildcard tests/*.sh) $(wildcard src/*.sh)
-ifneq ($(wildcard roulette),)
-	SHELL_FILES += roulette
-endif
+# Note: The generated 'roulette' script is excluded since bashly generates it
+SHELL_FILES := $(wildcard scripts/*.sh) $(wildcard src/*.sh)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-all: check test ## Run all checks and tests
+all: build check test ## Build, lint, format-check, and test (ready for commit)
 
-setup: ## Install development tools and git hooks
+setup: ## Install development tools, git hooks, and Ruby dependencies
 	@bash scripts/setup-hooks.sh
+
+build: ## Build the roulette script using bashly
+	@echo "Building roulette..."
+	@if ! command -v bashly >/dev/null 2>&1; then \
+		echo "Error: bashly not found. Run 'make setup' first."; \
+		exit 1; \
+	fi
+	@bashly generate
+	@echo "Build complete: ./roulette"
 
 test: ## Run BATS test suite
 	@echo "Running tests..."
-	@echo "Running BATS tests..."
 	@if command -v bats >/dev/null 2>&1; then \
 		bats tests/test_roulette.bats; \
 	else \
 		echo "Error: BATS not found. Install with: brew install bats-core"; \
 		exit 1; \
 	fi
-
-test-all: test test-bats ## Run all tests (legacy and BATS)
 
 lint: $(SHELLCHECK) ## Run shellcheck on all shell files
 	@echo "Running shellcheck..."
@@ -46,7 +51,7 @@ format-check: $(SHFMT) ## Check formatting without modifying files
 	@$(SHFMT) -d -i 2 -ci -bn $(SHELL_FILES)
 	@echo "Formatting check passed!"
 
-check: lint format-check ## Run all pre-commit checks (same as commit hook)
+check: lint format-check ## Run all pre-commit checks (lint + format-check)
 	@echo ""
 	@printf '\033[32mAll checks passed!\033[0m\n'
 
