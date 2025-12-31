@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
 
+# Colors (used in root_command.sh)
+# shellcheck disable=SC2034
 GREEN='\033[1;32m'
+# shellcheck disable=SC2034
+YELLOW='\033[1;33m'
+# shellcheck disable=SC2034
+RED='\033[1;31m'
+# shellcheck disable=SC2034
+CYAN='\033[1;36m'
+# shellcheck disable=SC2034
+DIM='\033[2m'
+# shellcheck disable=SC2034
 NC='\033[0m'
-# shellcheck disable=SC2034  # Used in command.sh
+# shellcheck disable=SC2034
 ICON="${GREEN}(::X::)${NC}"
+
+# Debug logging function - prints verbose info when debug mode is enabled
+debug_log() {
+  if [[ -n "${ROULETTE_DEBUG}" || -n "${args['--debug']:-}" ]]; then
+    echo -e "${DIM}[DEBUG]${NC} $*" >&2
+  fi
+}
 
 VIDEO_EXTENSIONS=(
   mp4 avi mkv mov wmv flv webm m4v mpg mpeg mp4
@@ -15,24 +33,22 @@ IS_WSL=false
 IS_MACOS=false
 
 print_logo() {
-  cat <<'EOF'
-    ----------------░░░░░░░-----------------
-    ---.--'-'''.---░░]▄▄▄▄▄░░--`'''''-'-''''
-    ---------------░░░╣▒░╠▌░░----'''''''''''
-    ''---------;░░Q▄░▀╩▓╗▌╩╩Q▄▄░░----------'
-    ''''''.'.-;░╠▀░░░░░░▓░░░░░░▀▒µ---'''''''
-    ------'-»╔#░░▄╧--░░╚╠╩░░--@▄░╚▒░-'''''''
-     ''-'---╓╝░░╙╚≤░-""░▓░░░░≤╛╚░∩╙╩░---'''
-         '!░║░░----└▒░;░▓░,µ▒░----░]▌░-
-         .-╣░░░░---░░│Φ░╙]▒│-----╓░"]▌-'
-       ---░╣░"╠▒╚▀▀▀▀▀▒░▀░╚▀▀▀▀▀▒╚▒-]▌░-'
-          .╝Q░,---.`,╗╩░φ░╚▄-''---░░░▌-
-          `░║░----;@╚░':╣=-"▒╦░----]▌└'
-           '-║▒-╙║░░---░▓░-"`░░φ▒-]▌└'
-            '└╙░░-╙---»≤░≥----╙;]ƒ╛░'
-               `╙▀╦▄Q--└░░'.╓Qƒ▀▒⌐
-                 '└└└▀▀▀▀▀▀▀░└└''
-EOF
+  printf '%s\n' "    ----------------░░░░░░░-----------------"
+  printf '%s\n' "    ---.--'-'''.---░░]▄▄▄▄▄░░--\`'''''-'-''''"
+  printf '%s\n' "    ---------------░░░╣▒░╠▌░░----'''''''''''"
+  printf '%s\n' "    ''---------;░░Q▄░▀╩▓╗▌╩╩Q▄▄░░----------'"
+  printf '%s\n' "    ''''''.'.-;░╠▀░░░░░░▓░░░░░░▀▒µ---'''''''"
+  printf '%s\n' "    ------'-»╔#░░▄╧--░░╚╠╩░░--@▄░╚▒░-'''''''"
+  printf '%s\n' "     ''-'---╓╝░░╙╚≤░-\"\"░▓░░░░≤╛╚░∩╙╩░---'''"
+  printf '%s\n' "         '!░║░░----└▒░;░▓░,µ▒░----░]▌░-"
+  printf '%s\n' "         .-╣░░░░---░░│Φ░╙]▒│-----╓░\"]▌-'"
+  printf '%s\n' "       ---░╣░\"╠▒╚▀▀▀▀▀▒░▀░╚▀▀▀▀▀▒╚▒-]▌░-'"
+  printf '%s\n' "          .╝Q░,---.'\`,╗╩░φ░╚▄-''---░░░▌-"
+  printf '%s\n' "          \`░║░----;@╚░':╣=-\"▒╦░----]▌└'"
+  printf '%s\n' "           '-║▒-╙║░░---░▓░-\"\`░░φ▒-]▌└'"
+  printf '%s\n' "            '└╙░░-╙---»≤░≥----╙;]ƒ╛░'"
+  printf '%s\n' "               \`╙▀╦▄Q--└░░'.╓Qƒ▀▒⌐"
+  printf '%s\n' "                 '└└└▀▀▀▀▀▀▀░└└''"
 }
 
 detect_wsl() {
@@ -151,15 +167,22 @@ convert_path_for_mpv() {
   fi
 }
 
+# Playback progress tracking
+LAST_PLAYBACK_PERCENT=0
+
+# Threshold for considering a video "watched" (percentage)
+WATCHED_THRESHOLD_PERCENT=10
+
 build_mpv_args() {
-  local args=()
+  local mpv_opts=()
+  debug_log "Building mpv args: MPV_GEOMETRY='${MPV_GEOMETRY}' MPV_VOLUME='${MPV_VOLUME}'"
   if [[ -n "${MPV_GEOMETRY}" ]]; then
-    args+=("--geometry=${MPV_GEOMETRY}")
+    mpv_opts+=("--geometry=${MPV_GEOMETRY}")
   fi
   if [[ -n "${MPV_VOLUME}" ]]; then
-    args+=("--volume=${MPV_VOLUME}")
+    mpv_opts+=("--volume=${MPV_VOLUME}")
   fi
-  echo "${args[@]}"
+  echo "${mpv_opts[@]}"
 }
 
 run_mpv() {
@@ -167,25 +190,31 @@ run_mpv() {
   local mpv_args
   mpv_args=$(build_mpv_args)
 
-  if [[ -n "${ROULETTE_DEBUG}" || -n "${args['--debug']}" ]]; then
-    echo -e "${GREEN}[DEBUG]${NC} ${MPV_PATH} ${mpv_args} \"${video_path}\""
+  debug_log "Executing: ${MPV_PATH} ${mpv_args} \"${video_path}\""
+
+  # Reset playback tracking
+  LAST_PLAYBACK_PERCENT=0
+
+  # Run mpv and capture stderr to parse progress
+  # mpv outputs status line like: AV: 00:00:02 / 00:39:45 (0%) A-V: -0.000
+  local mpv_output
+  # shellcheck disable=SC2086  # mpv_args intentionally unquoted - empty string should expand to nothing
+  mpv_output=$("${MPV_PATH}" ${mpv_args} "${video_path}" 2>&1)
+  local exit_code=$?
+
+  # Parse the last AV line for progress percentage
+  local percent
+  percent=$(echo "${mpv_output}" | grep -o '([0-9]*%)' | tail -1 | tr -d '()%')
+  if [[ -n "${percent}" ]]; then
+    LAST_PLAYBACK_PERCENT="${percent}"
   fi
-  "${MPV_PATH}" "${mpv_args}" "${video_path}"
+
+  debug_log "mpv exited with code ${exit_code}, playback: ${LAST_PLAYBACK_PERCENT}%"
+  return ${exit_code}
 }
 
-build_find_command() {
-  local find_cmd="find \"${DIRECTORY_PATH}\" -type f \\\( "
-  local first=true
-  for ext in "${VIDEO_EXTENSIONS[@]}"; do
-    if [[ "${first}" == true ]]; then
-      find_cmd+="-iname \"*.${ext}\""
-      first=false
-    else
-      find_cmd+=" -o -iname \"*.${ext}\""
-    fi
-  done
-  find_cmd+=" \\\)"
-  echo "${find_cmd}"
+is_video_watched_enough() {
+  [[ ${LAST_PLAYBACK_PERCENT} -ge ${WATCHED_THRESHOLD_PERCENT} ]]
 }
 
 list_videos() {
@@ -203,28 +232,35 @@ list_videos() {
   "${find_args[@]}"
 }
 
-load_played_set() {
-  PLAYED_SET_FILE="${args['--played-file']}"
-  if [[ -z "${PLAYED_SET_FILE}" ]]; then
-    PLAYED_SET_FILE="${HOME}/.roulette_played"
-  fi
-  declare -gA PLAYED_SET
-  PLAYED_SET=()
-  if [[ -f "${PLAYED_SET_FILE}" ]]; then
-    while IFS= read -r line; do
-      # shellcheck disable=SC2034  # PLAYED_SET used in command.sh
-      [[ -n "${line}" ]] && PLAYED_SET["${line}"]=1
-    done <"${PLAYED_SET_FILE}"
-  fi
+# Playlist management functions
+PLAYLIST=()
+
+load_playlist() {
+  local playlist_file="$1"
+  debug_log "Loading playlist from: ${playlist_file}"
+  PLAYLIST=()
+  [[ ! -f "${playlist_file}" ]] && return 1
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && PLAYLIST+=("${line}")
+  done <"${playlist_file}"
+  debug_log "Loaded ${#PLAYLIST[@]} entries from playlist"
+  return 0
 }
 
-save_played() {
-  local path="$1"
-  [[ -z "${path}" ]] && return 0
-  PLAYED_SET_FILE="${args['--played-file']}"
-  if [[ -z "${PLAYED_SET_FILE}" ]]; then
-    PLAYED_SET_FILE="${HOME}/.roulette_played"
-  fi
-  mkdir -p "$(dirname "${PLAYED_SET_FILE}")"
-  printf "%s\n" "${path}" >>"${PLAYED_SET_FILE}"
+save_playlist() {
+  local playlist_file="$1"
+  debug_log "Saving playlist to: ${playlist_file} (${#PLAYLIST[@]} entries)"
+  mkdir -p "$(dirname "${playlist_file}")"
+  printf '%s\n' "${PLAYLIST[@]}" >"${playlist_file}"
+}
+
+remove_from_playlist() {
+  local video_to_remove="$1"
+  debug_log "Removing from playlist: ${video_to_remove}"
+  local new_playlist=()
+  for v in "${PLAYLIST[@]}"; do
+    [[ "${v}" != "${video_to_remove}" ]] && new_playlist+=("${v}")
+  done
+  PLAYLIST=("${new_playlist[@]}")
+  debug_log "Playlist now has ${#PLAYLIST[@]} entries"
 }
