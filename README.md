@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.png" alt="Roulette Logo" height="200px">
+  <img src=".github/assets/logo.png" alt="Roulette Logo" height="200px">
   <h1>Roulette</h1>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Bash](https://img.shields.io/badge/language-bash-blue.svg)](https://www.gnu.org/software/bash/)
