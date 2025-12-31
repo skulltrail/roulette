@@ -23,9 +23,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bats
 
-      - name: Install BATS (macOS)
+      - name: Install BATS and Bash 4+ (macOS)
         if: runner.os == 'macOS'
-        run: brew install bats-core
+        run: |
+          brew install bats-core bash
+          echo "$(brew --prefix)/bin" >> $GITHUB_PATH
 
       - name: Install shellcheck and shfmt
         run: make setup
