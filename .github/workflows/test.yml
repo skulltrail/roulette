@@ -38,6 +38,21 @@ jobs:
       - name: Run format check
         run: make format-check
 
+      - name: Verify version consistency
+        run: |
+          VERSION_FILE=$(cat VERSION)
+          BASHLY_VERSION=$(grep '^version:' src/bashly.yml | sed 's/version: *"\(.*\)"/\1/')
+          SCRIPT_VERSION=$(./roulette --version)
+
+          echo "VERSION file: $VERSION_FILE"
+          echo "bashly.yml:   $BASHLY_VERSION"
+          echo "roulette:     $SCRIPT_VERSION"
+
+          if [ "$VERSION_FILE" != "$BASHLY_VERSION" ] || [ "$VERSION_FILE" != "$SCRIPT_VERSION" ]; then
+            echo "::error::Version mismatch detected! Run 'bashly generate' or update versions manually."
+            exit 1
+          fi
+
       - name: Run tests
         run: make test
 
@@ -152,6 +167,12 @@ jobs:
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
 
+      - name: Install bashly
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          gem install --user-install bashly
+          echo "$HOME/.local/share/gem/ruby/$(ruby -e 'puts RUBY_VERSION.split(".")[0..1].join(".")').0/bin" >> $GITHUB_PATH
+
       - name: Update version files
         if: steps.version.outputs.skip != 'true'
         run: |
@@ -163,8 +184,8 @@ jobs:
           # Update bashly.yml
           sed -i "s/^version: .*/version: \"$NEW_VERSION\"/" src/bashly.yml
 
-          # Update roulette script
-          sed -i "s/declare -g version=.*/declare -g version=\"$NEW_VERSION\"/" roulette
+          # Regenerate roulette script from bashly.yml
+          bashly generate
 
           echo "Updated version to $NEW_VERSION in all files"
 
