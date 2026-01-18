@@ -17,15 +17,27 @@ fi
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 BIN_DIR="${REPO_ROOT}/bin"
 
-# Colors for output
+# Colors and symbols for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
 
-info() { echo -e "${GREEN}[INFO]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
+# Symbols
+SYM_OK="${GREEN}✓${NC}"
+SYM_FAIL="${RED}✗${NC}"
+SYM_WARN="${YELLOW}⚠${NC}"
+SYM_ARROW="${CYAN}→${NC}"
+SYM_DOT="${DIM}•${NC}"
+
+step() { echo -e "  ${SYM_ARROW} $*"; }
+step_done() { echo -e "  ${SYM_OK} $*"; DID_INSTALL=true; }
+warn() { echo -e "  ${SYM_WARN} ${YELLOW}$*${NC}"; }
+fail() { echo -e "  ${SYM_FAIL} ${RED}$*${NC}"; }
 
 # Detect OS and architecture
 detect_platform() {
@@ -35,21 +47,21 @@ detect_platform() {
   arch_name=$(uname -m)
 
   case "${os_name}" in
-    Darwin) os="darwin" ;;
-    Linux) os="linux" ;;
-    *)
-      error "Unsupported OS: ${os_name}"
-      exit 1
-      ;;
+  Darwin) os="darwin" ;;
+  Linux) os="linux" ;;
+  *)
+    fail "Unsupported OS: ${os_name}"
+    exit 1
+    ;;
   esac
 
   case "${arch_name}" in
-    x86_64) arch="amd64" ;;
-    arm64 | aarch64) arch="arm64" ;;
-    *)
-      error "Unsupported architecture: ${arch_name}"
-      exit 1
-      ;;
+  x86_64) arch="amd64" ;;
+  arm64 | aarch64) arch="arm64" ;;
+  *)
+    fail "Unsupported architecture: ${arch_name}"
+    exit 1
+    ;;
   esac
 
   echo "${os}_${arch}"
@@ -57,7 +69,6 @@ detect_platform() {
 
 # Create tools directory
 setup_dirs() {
-  info "Setting up tools directory..."
   mkdir -p "${BIN_DIR}"
 }
 
@@ -67,12 +78,18 @@ install_shellcheck() {
   local platform
   platform=$(detect_platform)
 
+  # Check if already installed with correct version
   if [[ -x "${BIN_DIR}/shellcheck" ]]; then
-    info "shellcheck already installed"
-    return 0
+    local installed_version
+    installed_version=$("${BIN_DIR}/shellcheck" --version 2>/dev/null | grep -oE 'version: [0-9.]+' | cut -d' ' -f2 || echo "")
+    if [[ "v${installed_version}" == "${version}" ]]; then
+      SHELLCHECK_STATUS="exists"
+      return 0
+    fi
+    step "Upgrading shellcheck from v${installed_version} to ${version}..."
+  else
+    step "Installing shellcheck ${version}..."
   fi
-
-  info "Installing shellcheck ${version}..."
 
   local os arch url
   os=$(echo "${platform}" | cut -d_ -f1)
@@ -80,15 +97,10 @@ install_shellcheck() {
 
   if [[ "${os}" == "darwin" ]]; then
     url="https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.darwin.x86_64.tar.xz"
-    # For macOS ARM, use the aarch64 binary
-    if [[ "${arch}" == "arm64" ]]; then
-      url="https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.darwin.aarch64.tar.xz"
-    fi
+    [[ "${arch}" == "arm64" ]] && url="https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.darwin.aarch64.tar.xz"
   else
     url="https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.linux.x86_64.tar.xz"
-    if [[ "${arch}" == "arm64" ]]; then
-      url="https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.linux.aarch64.tar.xz"
-    fi
+    [[ "${arch}" == "arm64" ]] && url="https://github.com/koalaman/shellcheck/releases/download/${version}/shellcheck-${version}.linux.aarch64.tar.xz"
   fi
 
   local tmp_dir
@@ -96,14 +108,18 @@ install_shellcheck() {
   # shellcheck disable=SC2064
   trap "rm -rf '${tmp_dir}'" EXIT
 
-  curl -sSL "${url}" | tar -xJ -C "${tmp_dir}"
-  mv "${tmp_dir}"/shellcheck-*/shellcheck "${BIN_DIR}/"
-  chmod +x "${BIN_DIR}/shellcheck"
+  if curl -sSL "${url}" | tar -xJ -C "${tmp_dir}" &&
+    mv "${tmp_dir}"/shellcheck-*/shellcheck "${BIN_DIR}/" &&
+    chmod +x "${BIN_DIR}/shellcheck"; then
+    step_done "Installed shellcheck ${version}"
+    SHELLCHECK_STATUS="installed"
+  else
+    fail "Failed to install shellcheck"
+    SHELLCHECK_STATUS="failed"
+  fi
 
   trap - EXIT
   rm -rf "${tmp_dir}"
-
-  info "shellcheck installed successfully"
 }
 
 # Install shfmt locally
@@ -112,89 +128,32 @@ install_shfmt() {
   local platform
   platform=$(detect_platform)
 
+  # Check if already installed with correct version
   if [[ -x "${BIN_DIR}/shfmt" ]]; then
-    info "shfmt already installed"
-    return 0
+    local installed_version
+    installed_version=$("${BIN_DIR}/shfmt" --version 2>/dev/null || echo "")
+    if [[ "${installed_version}" == "${version}" ]]; then
+      SHFMT_STATUS="exists"
+      return 0
+    fi
+    step "Upgrading shfmt from ${installed_version} to ${version}..."
+  else
+    step "Installing shfmt ${version}..."
   fi
-
-  info "Installing shfmt ${version}..."
 
   local url="https://github.com/mvdan/sh/releases/download/${version}/shfmt_${version}_${platform}"
 
-  curl -sSL "${url}" -o "${BIN_DIR}/shfmt"
-  chmod +x "${BIN_DIR}/shfmt"
-
-  info "shfmt installed successfully"
-}
-
-# Install Ruby dependencies (bashly and its gems)
-install_ruby_deps() {
-  info "Checking Ruby dependencies..."
-
-  # Skip bashly installation in CI - it's only needed for building, not for lint/test
-  if [[ -n "${CI:-}" ]]; then
-    info "CI environment detected, skipping bashly installation (not needed for lint/test)"
-    return 0
-  fi
-
-  if ! command -v ruby &>/dev/null; then
-    warn "Ruby not found. Please install Ruby to use bashly for development."
-    warn "  macOS: brew install ruby"
-    warn "  Linux: apt install ruby / dnf install ruby"
-    return 0 # Don't fail setup, just warn
-  fi
-
-  if ! command -v gem &>/dev/null; then
-    warn "RubyGems not found. Please ensure Ruby is properly installed."
-    return 0 # Don't fail setup, just warn
-  fi
-
-  local ruby_version
-  ruby_version=$(ruby -e 'puts RUBY_VERSION')
-
-  # Ruby 4.0+ compatibility: some gems were extracted from stdlib
-  if [[ "${ruby_version}" == 4.* ]]; then
-    warn "Ruby 4.0 detected. Some bashly dependencies may have compatibility issues."
-    warn "If you encounter problems, consider using Ruby 3.x for development."
-
-    # Install erb gem (required for Ruby 4.0+ where it was extracted from stdlib)
-    if ! gem list -i "^erb$" &>/dev/null; then
-      info "Installing erb gem (required for Ruby 4.x)..."
-      gem install --user-install erb -v '~> 4.0' || gem install --user-install erb || {
-        warn "Failed to install erb gem. You may need to install it manually."
-      }
-    else
-      info "erb gem already installed"
-    fi
-  fi
-
-  # Install bashly (use version compatible with Ruby 4.0 if needed)
-  if ! gem list -i bashly &>/dev/null; then
-    info "Installing bashly gem..."
-    # Try --user-install first to avoid permission issues
-    if [[ "${ruby_version}" == 4.* ]]; then
-      # Ruby 4.0: filewatcher 2.x doesn't support Ruby 4.0, use older bashly
-      gem install --user-install bashly -v '< 1.0' || gem install --user-install bashly || {
-        warn "Failed to install bashly. You may need to install it manually: gem install bashly"
-        return 0 # Don't fail setup, just warn
-      }
-    else
-      gem install --user-install bashly || {
-        warn "Failed to install bashly. You may need to install it manually: gem install bashly"
-        return 0 # Don't fail setup, just warn
-      }
-    fi
+  if curl -sSL "${url}" -o "${BIN_DIR}/shfmt" && chmod +x "${BIN_DIR}/shfmt"; then
+    step_done "Installed shfmt ${version}"
+    SHFMT_STATUS="installed"
   else
-    info "bashly gem already installed"
+    fail "Failed to install shfmt"
+    SHFMT_STATUS="failed"
   fi
-
-  info "Ruby dependencies installed successfully"
 }
 
-# Install commitlint (using a simple bash implementation to avoid Node.js dependency)
+# Install git hooks
 install_commit_hooks() {
-  info "Setting up git hooks..."
-
   local hooks_dir="${REPO_ROOT}/.git/hooks"
   mkdir -p "${hooks_dir}"
 
@@ -340,8 +299,6 @@ fi
 echo -e "${GREEN}Commit message follows Conventional Commits format ✓${NC}"
 HOOK
   chmod +x "${hooks_dir}/commit-msg"
-
-  info "Git hooks installed successfully"
 }
 
 # Update .gitignore
@@ -349,7 +306,6 @@ update_gitignore() {
   local gitignore="${REPO_ROOT}/.gitignore"
 
   if ! grep -q "^bin/shellcheck$" "${gitignore}" 2>/dev/null; then
-    info "Updating .gitignore..."
     {
       echo ""
       echo "# Local development tools"
@@ -361,33 +317,56 @@ update_gitignore() {
 
 # Main
 main() {
-  info "Setting up development environment..."
+  # Initialize status tracking
+  SHELLCHECK_STATUS=""
+  SHFMT_STATUS=""
+  DID_INSTALL=false
+
+  echo ""
+  echo -e "${BOLD}Setting up development environment${NC}"
   echo ""
 
   setup_dirs
   install_shellcheck
   install_shfmt
-  install_ruby_deps
   install_commit_hooks
   update_gitignore
 
+  # Add blank line after installs only if we installed something
+  $DID_INSTALL && echo ""
+
+  echo -e "${CYAN}───────────────────────────────────${NC}"
+  echo -e "${BOLD}  Summary${NC}"
+  echo -e "${CYAN}───────────────────────────────────${NC}"
+
+  # Tools
+  if [[ -x "${BIN_DIR}/shellcheck" ]]; then
+    printf "  ${SYM_OK} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "shellcheck" "linter"
+  else
+    printf "  ${SYM_FAIL} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "shellcheck" "linter"
+  fi
+
+  if [[ -x "${BIN_DIR}/shfmt" ]]; then
+    printf "  ${SYM_OK} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "shfmt" "formatter"
+  else
+    printf "  ${SYM_FAIL} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "shfmt" "formatter"
+  fi
+
+  # Hooks
+  if [[ -x "${REPO_ROOT}/.git/hooks/pre-commit" ]]; then
+    printf "  ${SYM_OK} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "pre-commit" "git hook"
+  else
+    printf "  ${SYM_FAIL} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "pre-commit" "git hook"
+  fi
+
+  if [[ -x "${REPO_ROOT}/.git/hooks/commit-msg" ]]; then
+    printf "  ${SYM_OK} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "commit-msg" "git hook"
+  else
+    printf "  ${SYM_FAIL} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "commit-msg" "git hook"
+  fi
+
+  echo -e "${CYAN}───────────────────────────────────${NC}"
   echo ""
-  info "Setup complete!"
-  echo ""
-  echo "Installed tools:"
-  echo "  - shellcheck: ${BIN_DIR}/shellcheck"
-  echo "  - shfmt: ${BIN_DIR}/shfmt"
-  echo "  - bashly: $(command -v bashly 2>/dev/null || echo 'not installed')"
-  echo ""
-  echo "Git hooks installed:"
-  echo "  - pre-commit: Runs shellcheck and shfmt on staged shell scripts"
-  echo "  - commit-msg: Validates conventional commit format"
-  echo ""
-  echo "To format a shell script:"
-  echo "  ${BIN_DIR}/shfmt -w -i 2 -ci -bn <file>"
-  echo ""
-  echo "To lint a shell script:"
-  echo "  ${BIN_DIR}/shellcheck <file>"
 }
 
 main "$@"
