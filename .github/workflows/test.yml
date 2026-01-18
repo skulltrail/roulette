@@ -41,15 +41,13 @@ jobs:
       - name: Verify version consistency
         run: |
           VERSION_FILE=$(cat VERSION)
-          BASHLY_VERSION=$(grep '^version:' src/bashly.yml | sed 's/version: *"\(.*\)"/\1/')
           SCRIPT_VERSION=$(./roulette --version)
 
           echo "VERSION file: $VERSION_FILE"
-          echo "bashly.yml:   $BASHLY_VERSION"
           echo "roulette:     $SCRIPT_VERSION"
 
-          if [ "$VERSION_FILE" != "$BASHLY_VERSION" ] || [ "$VERSION_FILE" != "$SCRIPT_VERSION" ]; then
-            echo "::error::Version mismatch detected! Run 'bashly generate' or update versions manually."
+          if [ "$VERSION_FILE" != "$SCRIPT_VERSION" ]; then
+            echo "::error::Version mismatch detected! VERSION file ($VERSION_FILE) != roulette script ($SCRIPT_VERSION)"
             exit 1
           fi
 
@@ -167,12 +165,6 @@ jobs:
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
 
-      - name: Install bashly
-        if: steps.version.outputs.skip != 'true'
-        run: |
-          gem install --user-install bashly
-          echo "$HOME/.local/share/gem/ruby/$(ruby -e 'puts RUBY_VERSION.split(".")[0..1].join(".")').0/bin" >> $GITHUB_PATH
-
       - name: Update version files
         if: steps.version.outputs.skip != 'true'
         run: |
@@ -181,20 +173,17 @@ jobs:
           # Update VERSION file
           echo "$NEW_VERSION" > VERSION
 
-          # Update bashly.yml
-          sed -i "s/^version: .*/version: \"$NEW_VERSION\"/" src/bashly.yml
+          # Update VERSION variable in roulette script
+          sed -i "s/^VERSION=\".*\"/VERSION=\"$NEW_VERSION\"/" roulette
 
-          # Regenerate roulette script from bashly.yml
-          bashly generate
-
-          echo "Updated version to $NEW_VERSION in all files"
+          echo "Updated version to $NEW_VERSION in VERSION file and roulette script"
 
       - name: Commit and tag version
         if: steps.version.outputs.skip != 'true'
         run: |
           NEW_VERSION=${{ steps.version.outputs.new_version }}
 
-          git add VERSION src/bashly.yml roulette
+          git add VERSION roulette
           git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
           git tag -a "v$NEW_VERSION" -m "Release version $NEW_VERSION"
           git push origin main
