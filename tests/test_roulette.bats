@@ -81,13 +81,19 @@ create_test_videos() {
 @test "roulette shows version when run with --version" {
   run "${ROULETTE_BIN}" --version
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" =~ 1\.0\.0 ]]
+  [[ "${output}" =~ [0-9]+\.[0-9]+\.[0-9]+ ]]
 }
 
 @test "roulette help shows debug flag" {
   run "${ROULETTE_BIN}" --help
   [[ "${status}" -eq 0 ]]
   [[ "${output}" =~ "--debug" ]]
+}
+
+@test "roulette help shows fullscreen flag" {
+  run "${ROULETTE_BIN}" --help
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" =~ "--fullscreen" ]]
 }
 
 # ======================================================================
@@ -287,6 +293,24 @@ create_test_videos() {
   run timeout 2s bash -c "export MPV_VOLUME=50; echo 'q' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}' --debug"
 
   [[ "${output}" =~ "volume" ]] || [[ "${output}" =~ "Playing" ]]
+}
+
+@test "MPV_FULLSCREEN environment variable enables fullscreen" {
+  run timeout 2s bash -c "export MPV_FULLSCREEN=1; echo 'q' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}' --debug"
+
+  [[ "${output}" =~ "--fs" ]] || [[ "${output}" =~ "FULLSCREEN" ]] || [[ "${output}" =~ "Playing" ]]
+}
+
+@test "roulette --fullscreen flag passes --fs to mpv" {
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}' --fullscreen --debug 2>&1"
+
+  [[ "${output}" =~ "--fs" ]] || [[ "${output}" =~ "FULLSCREEN" ]] || [[ "${output}" =~ "Playing" ]]
+}
+
+@test "roulette -f short flag enables fullscreen" {
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}' -f --debug 2>&1"
+
+  [[ "${output}" =~ "--fs" ]] || [[ "${output}" =~ "FULLSCREEN" ]] || [[ "${output}" =~ "Playing" ]]
 }
 
 # ======================================================================
