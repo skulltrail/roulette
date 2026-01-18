@@ -10,3 +10,20 @@
 # Local development tools
 bin/shellcheck
 bin/shfmt
+
+# Claude/AI assistant files
+CLAUDE.md
+**/CLAUDE.md
+claude.md
+**/claude.md
+
+# Project management / notes
+TODO.md
+TODO.txt
+NOTES.md
+
+# Syncthing
+.stignore
+**/.stignore
+.stfolder/
+.stversions/

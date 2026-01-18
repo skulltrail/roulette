@@ -21,7 +21,6 @@ BIN_DIR="${REPO_ROOT}/bin"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -32,10 +31,12 @@ SYM_OK="${GREEN}✓${NC}"
 SYM_FAIL="${RED}✗${NC}"
 SYM_WARN="${YELLOW}⚠${NC}"
 SYM_ARROW="${CYAN}→${NC}"
-SYM_DOT="${DIM}•${NC}"
 
 step() { echo -e "  ${SYM_ARROW} $*"; }
-step_done() { echo -e "  ${SYM_OK} $*"; DID_INSTALL=true; }
+step_done() {
+  echo -e "  ${SYM_OK} $*"
+  DID_INSTALL=true
+}
 warn() { echo -e "  ${SYM_WARN} ${YELLOW}$*${NC}"; }
 fail() { echo -e "  ${SYM_FAIL} ${RED}$*${NC}"; }
 
@@ -47,21 +48,21 @@ detect_platform() {
   arch_name=$(uname -m)
 
   case "${os_name}" in
-  Darwin) os="darwin" ;;
-  Linux) os="linux" ;;
-  *)
-    fail "Unsupported OS: ${os_name}"
-    exit 1
-    ;;
+    Darwin) os="darwin" ;;
+    Linux) os="linux" ;;
+    *)
+      fail "Unsupported OS: ${os_name}"
+      exit 1
+      ;;
   esac
 
   case "${arch_name}" in
-  x86_64) arch="amd64" ;;
-  arm64 | aarch64) arch="arm64" ;;
-  *)
-    fail "Unsupported architecture: ${arch_name}"
-    exit 1
-    ;;
+    x86_64) arch="amd64" ;;
+    arm64 | aarch64) arch="arm64" ;;
+    *)
+      fail "Unsupported architecture: ${arch_name}"
+      exit 1
+      ;;
   esac
 
   echo "${os}_${arch}"
@@ -72,21 +73,33 @@ setup_dirs() {
   mkdir -p "${BIN_DIR}"
 }
 
+# Test if a binary actually runs on this platform
+binary_works() {
+  local binary="$1"
+  local test_flag="$2"
+  # Try to run the binary - if it's for wrong platform, this will fail
+  "${binary}" "${test_flag}" >/dev/null 2>&1
+}
+
 # Install shellcheck locally
 install_shellcheck() {
   local version="v0.11.0"
   local platform
   platform=$(detect_platform)
 
-  # Check if already installed with correct version
-  if [[ -x "${BIN_DIR}/shellcheck" ]]; then
-    local installed_version
-    installed_version=$("${BIN_DIR}/shellcheck" --version 2>/dev/null | grep -oE 'version: [0-9.]+' | cut -d' ' -f2 || echo "")
-    if [[ "v${installed_version}" == "${version}" ]]; then
-      SHELLCHECK_STATUS="exists"
-      return 0
+  # Check if already installed with correct version AND works on this platform
+  if [[ -f "${BIN_DIR}/shellcheck" ]]; then
+    if binary_works "${BIN_DIR}/shellcheck" "--version"; then
+      local installed_version
+      installed_version=$("${BIN_DIR}/shellcheck" --version 2>/dev/null | grep -oE 'version: [0-9.]+' | cut -d' ' -f2 || echo "")
+      if [[ "v${installed_version}" == "${version}" ]]; then
+        return 0
+      fi
+      step "Upgrading shellcheck from v${installed_version} to ${version}..."
+    else
+      step "Replacing shellcheck (wrong platform or corrupted)..."
+      rm -f "${BIN_DIR}/shellcheck"
     fi
-    step "Upgrading shellcheck from v${installed_version} to ${version}..."
   else
     step "Installing shellcheck ${version}..."
   fi
@@ -108,14 +121,12 @@ install_shellcheck() {
   # shellcheck disable=SC2064
   trap "rm -rf '${tmp_dir}'" EXIT
 
-  if curl -sSL "${url}" | tar -xJ -C "${tmp_dir}" &&
-    mv "${tmp_dir}"/shellcheck-*/shellcheck "${BIN_DIR}/" &&
-    chmod +x "${BIN_DIR}/shellcheck"; then
+  if curl -sSL "${url}" | tar -xJ -C "${tmp_dir}" \
+    && mv "${tmp_dir}"/shellcheck-*/shellcheck "${BIN_DIR}/" \
+    && chmod +x "${BIN_DIR}/shellcheck"; then
     step_done "Installed shellcheck ${version}"
-    SHELLCHECK_STATUS="installed"
   else
     fail "Failed to install shellcheck"
-    SHELLCHECK_STATUS="failed"
   fi
 
   trap - EXIT
@@ -128,15 +139,19 @@ install_shfmt() {
   local platform
   platform=$(detect_platform)
 
-  # Check if already installed with correct version
-  if [[ -x "${BIN_DIR}/shfmt" ]]; then
-    local installed_version
-    installed_version=$("${BIN_DIR}/shfmt" --version 2>/dev/null || echo "")
-    if [[ "${installed_version}" == "${version}" ]]; then
-      SHFMT_STATUS="exists"
-      return 0
+  # Check if already installed with correct version AND works on this platform
+  if [[ -f "${BIN_DIR}/shfmt" ]]; then
+    if binary_works "${BIN_DIR}/shfmt" "--version"; then
+      local installed_version
+      installed_version=$("${BIN_DIR}/shfmt" --version 2>/dev/null || echo "")
+      if [[ "${installed_version}" == "${version}" ]]; then
+        return 0
+      fi
+      step "Upgrading shfmt from ${installed_version} to ${version}..."
+    else
+      step "Replacing shfmt (wrong platform or corrupted)..."
+      rm -f "${BIN_DIR}/shfmt"
     fi
-    step "Upgrading shfmt from ${installed_version} to ${version}..."
   else
     step "Installing shfmt ${version}..."
   fi
@@ -145,10 +160,8 @@ install_shfmt() {
 
   if curl -sSL "${url}" -o "${BIN_DIR}/shfmt" && chmod +x "${BIN_DIR}/shfmt"; then
     step_done "Installed shfmt ${version}"
-    SHFMT_STATUS="installed"
   else
     fail "Failed to install shfmt"
-    SHFMT_STATUS="failed"
   fi
 }
 
@@ -161,75 +174,28 @@ install_commit_hooks() {
   cat >"${hooks_dir}/pre-commit" <<'HOOK'
 #!/usr/bin/env bash
 #
-# Pre-commit hook: runs shellcheck and shfmt on staged shell scripts
+# Pre-commit hook: runs full project validation (lint + format-check)
+# This ensures all shell files pass checks before any commit is made,
+# preventing CI failures upstream.
 #
 
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-TOOLS_BIN="${REPO_ROOT}/bin"
-
-# Use local tools if available, otherwise fall back to system
-SHELLCHECK="${TOOLS_BIN}/shellcheck"
-SHFMT="${TOOLS_BIN}/shfmt"
-
-[[ -x "${SHELLCHECK}" ]] || SHELLCHECK="shellcheck"
-[[ -x "${SHFMT}" ]] || SHFMT="shfmt"
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-error_count=0
+echo "Running pre-commit checks..."
 
-# Get staged shell scripts
-staged_files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(sh|bash)$' || true)
-# Also check files without extension that have shell shebang
-staged_scripts=$(git diff --cached --name-only --diff-filter=ACM | while read -r file; do
-    if [[ -f "${file}" ]] && head -1 "${file}" 2>/dev/null | grep -qE '^#!.*\b(ba)?sh\b'; then
-        echo "${file}"
-    fi
-done || true)
-
-all_files=$(echo -e "${staged_files}\n${staged_scripts}" | sort -u | grep -v '^$' || true)
-
-if [[ -z "${all_files}" ]]; then
-    exit 0
-fi
-
-echo "Running shell linting and formatting checks..."
-
-# Run shellcheck
-if command -v "${SHELLCHECK}" &>/dev/null; then
-    echo "Running shellcheck..."
-    for file in ${all_files}; do
-        if ! "${SHELLCHECK}" -x "${file}"; then
-            ((error_count++))
-        fi
-    done
-else
-    echo -e "${RED}shellcheck not found. Run 'scripts/setup-hooks.sh' to install.${NC}"
-    ((error_count++))
-fi
-
-# Run shfmt (check mode)
-if command -v "${SHFMT}" &>/dev/null; then
-    echo "Checking formatting with shfmt..."
-    for file in ${all_files}; do
-        if ! "${SHFMT}" -d -i 2 -ci -bn "${file}" >/dev/null 2>&1; then
-            echo -e "${RED}Formatting issue in: ${file}${NC}"
-            echo "Run: ${SHFMT} -w -i 2 -ci -bn ${file}"
-            ((error_count++))
-        fi
-    done
-else
-    echo -e "${RED}shfmt not found. Run 'scripts/setup-hooks.sh' to install.${NC}"
-    ((error_count++))
-fi
-
-if [[ ${error_count} -gt 0 ]]; then
-    echo -e "${RED}Pre-commit checks failed with ${error_count} error(s)${NC}"
+# Run make check (lint + format-check on all shell files)
+if ! make -C "${REPO_ROOT}" check; then
+    echo ""
+    echo -e "${RED}Pre-commit checks failed!${NC}"
+    echo "Fix the issues above before committing."
+    echo "Run 'make format' to auto-fix formatting issues."
     exit 1
 fi
 
@@ -318,8 +284,6 @@ update_gitignore() {
 # Main
 main() {
   # Initialize status tracking
-  SHELLCHECK_STATUS=""
-  SHFMT_STATUS=""
   DID_INSTALL=false
 
   echo ""
