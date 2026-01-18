@@ -29,7 +29,7 @@ I built this out of a need to tackle my ever-growing video collection. With coun
   - `[d]elete` - Delete the current video file (with confirmation)
   - `[q]uit` - Exit the script
 - **Format Support**: Supports common video extensions: `mp4`, `avi`, `mkv`, `mov`, `wmv`, `flv`, `webm`, `m4v`, `mpg`, `mpeg`
-- **Environment Variables**: Customize mpv behavior with `MPV_GEOMETRY`
+- **Environment Variables**: Customize mpv behavior with `MPV_GEOMETRY` and `MPV_VOLUME`
 
 ## Prerequisites
 
@@ -131,7 +131,7 @@ You can modify the `detect_media_directory` function in `bin/roulette` to custom
 
 | Variable       | Description                                   |
 | -------------- | --------------------------------------------- |
-| `MPV_GEOMETRY` | Set mpv window geometry (e.g., `50%x50%+0+0`) |
+| `MPV_GEOMETRY` | Set mpv window geometry (e.g., `50%x50%+0+0` for half-screen top-left) |
 
 ## Future Enhancements
 
