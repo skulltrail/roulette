@@ -1,6 +1,56 @@
 #!/usr/bin/env bats
 # Comprehensive BATS tests for roulette
 
+# GNU timeout is not available by default on macOS GitHub runners.
+# Provide a minimal fallback that supports the timeout usage in this suite.
+if ! command -v timeout >/dev/null 2>&1; then
+  timeout() {
+    local signal="TERM"
+
+    if [[ "$1" == --signal=* ]]; then
+      signal="${1#--signal=}"
+      shift
+    elif [[ "$1" == --signal ]]; then
+      signal="$2"
+      shift 2
+    fi
+
+    local duration="$1"
+    shift
+
+    local seconds="${duration%s}"
+    if [[ "${seconds}" == "${duration}" ]] || [[ -z "${seconds}" ]]; then
+      echo "Unsupported timeout format: ${duration}" >&2
+      return 125
+    fi
+
+    "$@" &
+    local cmd_pid=$!
+
+    (
+      sleep "${seconds}"
+      if kill -0 "${cmd_pid}" 2>/dev/null; then
+        kill "-${signal}" "${cmd_pid}" 2>/dev/null || true
+        sleep 0.2
+        kill -0 "${cmd_pid}" 2>/dev/null && kill -KILL "${cmd_pid}" 2>/dev/null || true
+      fi
+    ) &
+    local timer_pid=$!
+
+    wait "${cmd_pid}"
+    local cmd_status=$?
+
+    kill "${timer_pid}" 2>/dev/null || true
+    wait "${timer_pid}" 2>/dev/null || true
+
+    if [[ "${cmd_status}" -eq 143 ]] || [[ "${cmd_status}" -eq 137 ]]; then
+      return 124
+    fi
+
+    return "${cmd_status}"
+  }
+fi
+
 # Test setup - runs before each test
 setup() {
   BATS_TEST_DIRNAME="$(cd "$(dirname "${BATS_TEST_FILENAME}")" && pwd)"

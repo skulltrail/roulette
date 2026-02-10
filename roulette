@@ -183,6 +183,7 @@ detect_macos() {
 refocus_terminal() {
   if [[ "${IS_MACOS}" == true ]]; then
     local app="${TERM_PROGRAM:-Terminal}"
+    [[ "${app}" == "Apple_Terminal" ]] && app="Terminal"
     osascript -e "tell application \"${app}\" to activate" 2>/dev/null
   fi
 }
