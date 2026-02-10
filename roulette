@@ -180,6 +180,13 @@ detect_macos() {
   fi
 }
 
+refocus_terminal() {
+  if [[ "${IS_MACOS}" == true ]]; then
+    local app="${TERM_PROGRAM:-Terminal}"
+    osascript -e "tell application \"${app}\" to activate" 2>/dev/null
+  fi
+}
+
 detect_media_directory() {
   # Check ROULETTE_PATH environment variable first
   if [[ -n "${ROULETTE_PATH}" ]]; then
@@ -337,6 +344,8 @@ run_mpv() {
   # shellcheck disable=SC2086  # mpv_args intentionally unquoted - empty string should expand to nothing
   mpv_output=$("${MPV_PATH}" ${mpv_args} "${video_path}" 2>&1)
   local exit_code=$?
+
+  refocus_terminal
 
   # Treat segfault on exit as success (common WSL mpv issue)
   if [[ "${IS_WSL}" == true ]] && [[ ${exit_code} -eq 139 ]]; then
