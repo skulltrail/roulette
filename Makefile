@@ -5,7 +5,8 @@ BIN_DIR := bin
 SHELLCHECK := $(BIN_DIR)/shellcheck
 SHFMT := $(BIN_DIR)/shfmt
 BATS ?= bats
-BATS_FORMATTER ?= pretty
+DEFAULT_BATS_FORMATTER := $(if $(filter dumb,$(TERM)),tap,$(if $(strip $(TERM)),pretty,tap))
+BATS_FORMATTER ?= $(DEFAULT_BATS_FORMATTER)
 BATS_FLAGS ?= --formatter $(BATS_FORMATTER)
 
 # Shell files to check
