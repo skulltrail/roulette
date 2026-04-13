@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
-# roulette - Play random video files from a directory
+# roulette - Play random video files from one or more directories
 
 set -e
 
-VERSION="1.2.0"
+VERSION="1.2.0" # x-release-please-version
 
 # === ARGUMENT VARIABLES ===
 ARG_DEBUG=""
 ARG_RESET=""
 ARG_CLEAN=""
 ARG_FULLSCREEN=""
-ARG_DIRECTORY=""
+ARG_IGNORE_MPV_ENV=""
+ARG_SHUFFLE=""
+ARG_DIRECTORIES=()
 
 # === HELP AND VERSION ===
 show_help() {
   cat <<'EOF'
-roulette - Play random video files from a directory
+roulette - Play random video files from one or more directories
 
 Usage:
-  roulette [DIRECTORY] [options]
+  roulette [DIRECTORY ...] [options]
   roulette --help | -h
   roulette --version | -v
 
@@ -33,7 +35,7 @@ Options:
     Enable debug mode
 
   --reset
-    Empty playlist and rescan directory
+    Empty playlist and rescan source directories
 
   --clean
     Validate playlist and remove stale entries (non-existent files)
@@ -41,17 +43,23 @@ Options:
   --fullscreen, -f
     Start video playback in fullscreen mode (macOS)
 
+  --bypass
+    Ignore MPV_GEOMETRY, MPV_VOLUME, and MPV_FULLSCREEN environment variables
+
+  --shuffle
+    Shuffle across all source directories instead of honoring directory priority
+
 Arguments:
   DIRECTORY
-    Path to search for video files
+    One or more paths to search for video files
 
 Environment Variables:
   ROULETTE_DEBUG
     Enable debug mode
 
   ROULETTE_PATH
-    Base path to media directory (e.g., /Volumes/media/archive/video or
-    /mnt/media/archive/video)
+    Base path(s) to media directories. Use ':' to separate multiple paths
+    (e.g., /Volumes/media/archive/video:/Volumes/media/archive/home-video)
 
   MPV_GEOMETRY
     Set default window positioning (e.g., '50%x50%+0+0' for top-left corner)
@@ -96,18 +104,21 @@ parse_args() {
         ARG_FULLSCREEN=1
         shift
         ;;
+      --bypass)
+        ARG_IGNORE_MPV_ENV=1
+        shift
+        ;;
+      --shuffle)
+        ARG_SHUFFLE=1
+        shift
+        ;;
       -*)
         printf "invalid option: %s\n" "$1" >&2
         exit 1
         ;;
       *)
-        if [[ -z "$ARG_DIRECTORY" ]]; then
-          ARG_DIRECTORY="$1"
-          shift
-        else
-          printf "invalid argument: %s\n" "$1" >&2
-          exit 1
-        fi
+        ARG_DIRECTORIES+=("$1")
+        shift
         ;;
     esac
   done
@@ -146,6 +157,13 @@ MPV_PATH="/usr/local/bin/mpv"
 MPV_PATH_ARM="/opt/homebrew/bin/mpv"
 IS_WSL=false
 IS_MACOS=false
+DIRECTORY_PATH=""
+DIRECTORY_PATHS=()
+SCANNABLE_DIRECTORY_PATHS=()
+UNSCANNABLE_DIRECTORY_PATHS=()
+PLAYLIST_STORAGE_MODE="relative"
+PLAYLIST_BASE_DIR=""
+PLAYLIST_FILE=""
 
 print_logo() {
   printf '%s\n' "    ----------------░░░░░░░-----------------"
@@ -181,62 +199,172 @@ detect_macos() {
 }
 
 refocus_terminal() {
-  if [[ "${IS_MACOS}" == true ]]; then
+  if [[ "${IS_MACOS}" == true ]] && command -v osascript >/dev/null 2>&1; then
     local app="${TERM_PROGRAM:-Terminal}"
     [[ "${app}" == "Apple_Terminal" ]] && app="Terminal"
-    osascript -e "tell application \"${app}\" to activate" 2>/dev/null
+    osascript -e "tell application \"${app}\" to activate" >/dev/null 2>&1 || true
   fi
 }
 
 detect_media_directory() {
   # Check ROULETTE_PATH environment variable first
   if [[ -n "${ROULETTE_PATH}" ]]; then
-    if [[ -d "${ROULETTE_PATH}" ]]; then
-      DIRECTORY_PATH="${ROULETTE_PATH}"
-      echo "Using ROULETTE_PATH: ${DIRECTORY_PATH}"
-      return 0
-    else
-      echo "WARNING: ROULETTE_PATH set but directory not found: ${ROULETTE_PATH}"
-    fi
-  fi
+    DIRECTORY_PATHS=()
+    local env_paths=()
+    local env_path=""
+    IFS=':' read -r -a env_paths <<<"${ROULETTE_PATH}"
 
-  local potential_paths=()
+    for env_path in "${env_paths[@]}"; do
+      [[ -z "${env_path}" ]] && continue
+      local normalized_env_path=""
+      if normalized_env_path=$(normalize_directory_path "${env_path}"); then
+        add_directory_path "${normalized_env_path}"
+      else
+        echo "WARNING: ROULETTE_PATH entry not found: ${env_path/#\~/${HOME}}"
+      fi
+    done
 
-  if [[ "${IS_MACOS}" == true ]]; then
-    potential_paths=(
-      "/Volumes/media/archive/video"
-    )
-  elif [[ "${IS_WSL}" == true ]]; then
-    potential_paths=(
-      "/mnt/media/archive/video"
-      "/media/archive/video"
-      "/mnt/m/media/archive/video"
-    )
-  else
-    potential_paths=(
-      "/media/archive/video"
-      "/mnt/media/archive/video"
-    )
-  fi
-
-  for path in "${potential_paths[@]}"; do
-    if [[ -d "${path}" ]]; then
-      DIRECTORY_PATH="${path}"
-      echo "Found media directory: ${DIRECTORY_PATH}"
+    if [[ ${#DIRECTORY_PATHS[@]} -gt 0 ]]; then
+      DIRECTORY_PATH="${DIRECTORY_PATHS[0]}"
+      print_directory_selection "Using ROULETTE_PATH"
       return 0
     fi
-  done
 
-  if [[ "${IS_MACOS}" == true ]]; then
-    DIRECTORY_PATH="/Volumes/media/archive/video"
-  elif [[ "${IS_WSL}" == true ]]; then
-    DIRECTORY_PATH="/mnt/media/archive/video"
-  else
-    DIRECTORY_PATH="/media/archive/video"
+    echo "WARNING: ROULETTE_PATH set but no valid directories were found: ${ROULETTE_PATH}"
   fi
+
+  DIRECTORY_PATHS=()
+  local path=""
+  local normalized_path=""
+  while IFS= read -r path; do
+    [[ -z "${path}" ]] && continue
+    if normalized_path=$(normalize_directory_path "${path}"); then
+      add_directory_path "${normalized_path}"
+    fi
+  done < <(get_default_media_paths)
+
+  if [[ ${#DIRECTORY_PATHS[@]} -gt 0 ]]; then
+    DIRECTORY_PATH="${DIRECTORY_PATHS[0]}"
+    print_directory_selection "Found media"
+    return 0
+  fi
+
+  DIRECTORY_PATH="$(get_default_media_paths | sed -n '1p')"
+  DIRECTORY_PATHS=("${DIRECTORY_PATH}")
 
   echo "WARNING: Media directory not found. Using default: ${DIRECTORY_PATH}"
   return 1
+}
+
+get_default_media_paths() {
+  if [[ "${IS_MACOS}" == true ]]; then
+    printf '%s\n' \
+      "/Volumes/media/downloads/video" \
+      "/Volumes/media/archive/video"
+  elif [[ "${IS_WSL}" == true ]]; then
+    printf '%s\n' \
+      "/mnt/media/archive/video" \
+      "/media/archive/video" \
+      "/mnt/m/media/archive/video"
+  else
+    printf '%s\n' \
+      "/media/archive/video" \
+      "/mnt/media/archive/video"
+  fi
+}
+
+normalize_directory_path() {
+  local candidate_path="$1"
+  candidate_path="${candidate_path/#\~/${HOME}}"
+  [[ -d "${candidate_path}" ]] || return 1
+
+  (
+    cd "${candidate_path}" >/dev/null 2>&1 && pwd -P
+  )
+}
+
+add_directory_path() {
+  local candidate_path="$1"
+  local existing_path=""
+  for existing_path in "${DIRECTORY_PATHS[@]}"; do
+    [[ "${existing_path}" == "${candidate_path}" ]] && return 0
+  done
+  DIRECTORY_PATHS+=("${candidate_path}")
+}
+
+add_unique_path() {
+  local array_name="$1"
+  local candidate_path="$2"
+  local existing_path=""
+  local current_paths=()
+  eval "current_paths=(\"\${${array_name}[@]}\")"
+  for existing_path in "${current_paths[@]}"; do
+    [[ "${existing_path}" == "${candidate_path}" ]] && return 0
+  done
+  eval "${array_name}+=(\"\${candidate_path}\")"
+}
+
+print_directory_selection() {
+  local label="$1"
+  if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
+    echo "${label}: ${DIRECTORY_PATHS[0]}"
+    return
+  fi
+
+  echo "${label} directories:"
+  local selected_path=""
+  for selected_path in "${DIRECTORY_PATHS[@]}"; do
+    echo "  - ${selected_path}"
+  done
+}
+
+directory_is_scannable() {
+  local directory_path="$1"
+  find "${directory_path}" -type f -print -quit >/dev/null 2>&1
+}
+
+classify_directory_scan_access() {
+  SCANNABLE_DIRECTORY_PATHS=()
+  UNSCANNABLE_DIRECTORY_PATHS=()
+
+  local directory_path=""
+  for directory_path in "${DIRECTORY_PATHS[@]}"; do
+    if directory_is_scannable "${directory_path}"; then
+      add_unique_path "SCANNABLE_DIRECTORY_PATHS" "${directory_path}"
+    else
+      add_unique_path "UNSCANNABLE_DIRECTORY_PATHS" "${directory_path}"
+    fi
+  done
+}
+
+print_unscannable_directory_warning() {
+  [[ ${#UNSCANNABLE_DIRECTORY_PATHS[@]} -eq 0 ]] && return 0
+
+  echo "WARNING: Unable to scan source directories:"
+  local directory_path=""
+  for directory_path in "${UNSCANNABLE_DIRECTORY_PATHS[@]}"; do
+    echo "  - ${directory_path}"
+  done
+}
+
+build_multi_directory_playlist_id() {
+  printf '%s\n' "${DIRECTORY_PATHS[@]}" | LC_ALL=C sort | cksum | awk '{print $1}'
+}
+
+configure_playlist_storage() {
+  if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
+    PLAYLIST_STORAGE_MODE="relative"
+    PLAYLIST_BASE_DIR="${DIRECTORY_PATH}"
+    PLAYLIST_FILE="${DIRECTORY_PATH}/.roulette_playlist"
+    PLAYED_FILE="${DIRECTORY_PATH}/.roulette_played"
+    return
+  fi
+
+  PLAYLIST_STORAGE_MODE="absolute"
+  PLAYLIST_BASE_DIR=""
+  PLAYLIST_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/roulette/playlist-$(build_multi_directory_playlist_id).txt"
+  PLAYED_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/roulette/played-$(build_multi_directory_playlist_id).txt"
+  echo "Using shared playlist: ${PLAYLIST_FILE}"
 }
 
 check_and_install_mpv() {
@@ -310,20 +438,31 @@ WATCHED_THRESHOLD_PERCENT=10
 
 build_mpv_args() {
   local mpv_opts=()
-  debug_log "Building mpv args: MPV_GEOMETRY='${MPV_GEOMETRY}' MPV_VOLUME='${MPV_VOLUME}' MPV_FULLSCREEN='${MPV_FULLSCREEN}' ARG_FULLSCREEN='${ARG_FULLSCREEN}'"
+  local mpv_geometry="${MPV_GEOMETRY:-}"
+  local mpv_volume="${MPV_VOLUME:-}"
+  local mpv_fullscreen="${MPV_FULLSCREEN:-}"
+
+  if [[ -n "${ARG_IGNORE_MPV_ENV}" ]]; then
+    debug_log "Ignoring MPV_* environment variables due to --bypass"
+    mpv_geometry=""
+    mpv_volume=""
+    mpv_fullscreen=""
+  fi
+
+  debug_log "Building mpv args: geometry='${mpv_geometry}' volume='${mpv_volume}' fullscreen_env='${mpv_fullscreen}' ARG_FULLSCREEN='${ARG_FULLSCREEN}'"
 
   # WSL with Linux mpv: use gpu-next to reduce exit crashes
   if [[ "${IS_WSL}" == true ]] && [[ "${MPV_PATH}" != *.exe ]]; then
     mpv_opts+=("--vo=gpu-next")
   fi
 
-  if [[ -n "${MPV_GEOMETRY}" ]]; then
-    mpv_opts+=("--geometry=${MPV_GEOMETRY}")
+  if [[ -n "${mpv_geometry}" ]]; then
+    mpv_opts+=("--geometry=${mpv_geometry}")
   fi
-  if [[ -n "${MPV_VOLUME}" ]]; then
-    mpv_opts+=("--volume=${MPV_VOLUME}")
+  if [[ -n "${mpv_volume}" ]]; then
+    mpv_opts+=("--volume=${mpv_volume}")
   fi
-  if [[ -n "${MPV_FULLSCREEN}" || -n "${ARG_FULLSCREEN}" ]]; then
+  if [[ -n "${mpv_fullscreen}" || -n "${ARG_FULLSCREEN}" ]]; then
     mpv_opts+=("--fs")
   fi
   echo "${mpv_opts[@]}"
@@ -342,9 +481,13 @@ run_mpv() {
   # Run mpv and capture stderr to parse progress
   # mpv outputs status line like: AV: 00:00:02 / 00:39:45 (0%) A-V: -0.000
   local mpv_output
+  local exit_code
   # shellcheck disable=SC2086  # mpv_args intentionally unquoted - empty string should expand to nothing
-  mpv_output=$("${MPV_PATH}" ${mpv_args} "${video_path}" 2>&1)
-  local exit_code=$?
+  if mpv_output=$("${MPV_PATH}" ${mpv_args} "${video_path}" 2>&1); then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
 
   refocus_terminal
 
@@ -355,7 +498,7 @@ run_mpv() {
 
   # Parse the last AV line for progress percentage
   local percent
-  percent=$(echo "${mpv_output}" | grep -o '([0-9]*%)' | tail -1 | tr -d '()%')
+  percent=$(printf '%s\n' "${mpv_output}" | sed -n 's/.*(\([0-9][0-9]*\)%).*/\1/p' | tail -1)
   if [[ -n "${percent}" ]]; then
     LAST_PLAYBACK_PERCENT="${percent}"
   fi
@@ -368,8 +511,45 @@ is_video_watched_enough() {
   [[ ${LAST_PLAYBACK_PERCENT} -ge ${WATCHED_THRESHOLD_PERCENT} ]]
 }
 
+persist_video_state_if_needed() {
+  local video_state="$1"
+  local random_video="$2"
+
+  case "${video_state}" in
+    watched)
+      mark_video_as_played "${random_video}"
+      save_state_files
+      ;;
+    deleted)
+      remove_video_from_state "${random_video}"
+      save_state_files
+      ;;
+  esac
+}
+
+try_refill_playlist() {
+  local previous_count=${#PLAYLIST[@]}
+  [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 1
+
+  resync_state_with_scan "Rescanning library"
+  if [[ ${#PLAYLIST[@]} -gt ${previous_count} ]]; then
+    save_state_files
+    debug_log "Refilled playlist with $((${#PLAYLIST[@]} - previous_count)) new video(s)"
+    return 0
+  fi
+
+  save_state_files
+  return 1
+}
+
 list_videos() {
-  local find_args=(find "${DIRECTORY_PATH}" -type f '(')
+  [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 1
+  local find_args=(find)
+  local directory_path=""
+  for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
+    find_args+=("${directory_path}")
+  done
+  find_args+=(-type f '(')
   local i
   for ((i = 0; i < ${#VIDEO_EXTENSIONS[@]}; i++)); do
     local ext="${VIDEO_EXTENSIONS[${i}]}"
@@ -383,8 +563,128 @@ list_videos() {
   "${find_args[@]}"
 }
 
+progress_output_enabled() {
+  [[ -t 1 ]] && [[ "${TERM:-}" != "dumb" ]]
+}
+
+draw_progress_bar() {
+  local label="$1"
+  local processed="$2"
+  local total="$3"
+  local extra="$4"
+  local width=28
+  local percent=100
+  local filled=0
+  local empty=0
+  local bar=""
+
+  progress_output_enabled || return 0
+
+  if [[ ${total} -gt 0 ]]; then
+    percent=$((processed * 100 / total))
+  fi
+  ((percent > 100)) && percent=100
+
+  filled=$((percent * width / 100))
+  empty=$((width - filled))
+  printf -v bar '%*s' "${filled}" ''
+  bar="${bar// /=}"
+  if [[ ${empty} -gt 0 ]]; then
+    local padding=""
+    printf -v padding '%*s' "${empty}" ''
+    padding="${padding// /.}"
+    bar="${bar}${padding}"
+  fi
+
+  printf '\r\033[2K%s [%s] %3d%% | %s/%s%s' \
+    "${label}" "${bar}" "${percent}" "${processed}" "${total}" "${extra}" >&2
+}
+
+finish_progress_bar() {
+  progress_output_enabled || return 0
+  printf '\n' >&2
+}
+
+is_supported_video_path() {
+  local file_path="$1"
+  local extension="${file_path##*.}"
+  extension=$(printf '%s' "${extension}" | tr '[:upper:]' '[:lower:]')
+  local known_extension=""
+
+  for known_extension in "${VIDEO_EXTENSIONS[@]}"; do
+    if [[ "${extension}" == "${known_extension}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+count_scannable_files() {
+  local total_files=0
+  local indexed_dirs=0
+  local directory_path=""
+  local directory_file_count=0
+  local file_path=""
+
+  [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || {
+    printf '0\n'
+    return 0
+  }
+
+  for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
+    directory_file_count=0
+    while IFS= read -r -d '' file_path; do
+      directory_file_count=$((directory_file_count + 1))
+    done < <(find "${directory_path}" -type f -print0)
+
+    total_files=$((total_files + directory_file_count))
+    indexed_dirs=$((indexed_dirs + 1))
+    draw_progress_bar "Indexing scan" "${indexed_dirs}" "${#SCANNABLE_DIRECTORY_PATHS[@]}" " | ${total_files} files"
+  done
+
+  if [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]]; then
+    finish_progress_bar
+  fi
+
+  printf '%s\n' "${total_files}"
+}
+
+scan_videos_with_progress() {
+  local scan_label="${1:-Scanning library}"
+  local total_files=0
+  local processed_files=0
+  local matched_videos=0
+  local directory_path=""
+  local file_path=""
+
+  SCANNED_VIDEOS=()
+  [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 0
+
+  total_files=$(count_scannable_files)
+
+  for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
+    while IFS= read -r -d '' file_path; do
+      processed_files=$((processed_files + 1))
+      if is_supported_video_path "${file_path}"; then
+        SCANNED_VIDEOS+=("${file_path}")
+        matched_videos=$((matched_videos + 1))
+      fi
+      draw_progress_bar "${scan_label}" "${processed_files}" "${total_files}" " | ${matched_videos} videos"
+    done < <(find "${directory_path}" -type f -print0)
+  done
+
+  if [[ ${total_files} -gt 0 ]]; then
+    draw_progress_bar "${scan_label}" "${total_files}" "${total_files}" " | ${matched_videos} videos"
+    finish_progress_bar
+  fi
+}
+
 # Playlist management functions
 PLAYLIST=()
+PLAYED_HISTORY=()
+SCANNED_VIDEOS=()
+LAST_COMPACT_REMOVED_COUNT=0
+STATE_DIRTY=false
 
 # Convert absolute path to relative (for storing in playlist)
 to_relative_path() {
@@ -435,9 +735,12 @@ load_playlist() {
   [[ ! -f "${playlist_file}" ]] && return 1
   while IFS= read -r line; do
     if [[ -n "${line}" ]]; then
-      # Convert relative paths to absolute using current base directory
-      local absolute_path
-      absolute_path=$(to_absolute_path "${line}" "${base_dir}")
+      local absolute_path=""
+      if [[ "${PLAYLIST_STORAGE_MODE}" == "relative" ]]; then
+        absolute_path=$(to_absolute_path "${line}" "${base_dir}")
+      else
+        absolute_path="${line}"
+      fi
       PLAYLIST+=("${absolute_path}")
     fi
   done <"${playlist_file}"
@@ -445,28 +748,119 @@ load_playlist() {
   return 0
 }
 
+PLAYED_FILE=""
+
 save_playlist() {
   local playlist_file="$1"
   local base_dir="$2"
   debug_log "Saving playlist to: ${playlist_file} (${#PLAYLIST[@]} entries, base: ${base_dir})"
   mkdir -p "$(dirname "${playlist_file}")"
-  # Convert absolute paths to relative for portable storage
-  local relative_path
+  local stored_path=""
   for video in "${PLAYLIST[@]}"; do
-    relative_path=$(to_relative_path "${video}" "${base_dir}")
-    printf '%s\n' "${relative_path}"
+    if [[ "${PLAYLIST_STORAGE_MODE}" == "relative" ]]; then
+      stored_path=$(to_relative_path "${video}" "${base_dir}")
+    else
+      stored_path="${video}"
+    fi
+    printf '%s\n' "${stored_path}"
   done >"${playlist_file}"
+}
+
+load_played_history() {
+  local played_file="$1"
+  local base_dir="$2"
+  debug_log "Loading played history from: ${played_file} (base: ${base_dir})"
+  PLAYED_HISTORY=()
+  [[ ! -f "${played_file}" ]] && return 1
+  while IFS= read -r line; do
+    if [[ -n "${line}" ]]; then
+      local absolute_path=""
+      if [[ "${PLAYLIST_STORAGE_MODE}" == "relative" ]]; then
+        absolute_path=$(to_absolute_path "${line}" "${base_dir}")
+      else
+        absolute_path="${line}"
+      fi
+      PLAYED_HISTORY+=("${absolute_path}")
+    fi
+  done <"${played_file}"
+  debug_log "Loaded ${#PLAYED_HISTORY[@]} entries from played history"
+  return 0
+}
+
+save_played_history() {
+  local played_file="$1"
+  local base_dir="$2"
+  debug_log "Saving played history to: ${played_file} (${#PLAYED_HISTORY[@]} entries, base: ${base_dir})"
+  mkdir -p "$(dirname "${played_file}")"
+  local stored_path=""
+  for video in "${PLAYED_HISTORY[@]}"; do
+    if [[ "${PLAYLIST_STORAGE_MODE}" == "relative" ]]; then
+      stored_path=$(to_relative_path "${video}" "${base_dir}")
+    else
+      stored_path="${video}"
+    fi
+    printf '%s\n' "${stored_path}"
+  done >"${played_file}"
+}
+
+mark_state_dirty() {
+  STATE_DIRTY=true
+}
+
+state_files_missing() {
+  [[ ! -f "${PLAYLIST_FILE}" ]] || [[ ! -f "${PLAYED_FILE}" ]]
+}
+
+path_in_array() {
+  local array_name="$1"
+  local candidate_path="$2"
+  local current_paths=()
+  local existing_path=""
+
+  eval "current_paths=(\"\${${array_name}[@]}\")"
+  for existing_path in "${current_paths[@]}"; do
+    [[ "${existing_path}" == "${candidate_path}" ]] && return 0
+  done
+  return 1
+}
+
+remove_path_from_array() {
+  local array_name="$1"
+  local path_to_remove="$2"
+  local current_paths=()
+  local updated_paths=()
+  local existing_path=""
+
+  eval "current_paths=(\"\${${array_name}[@]}\")"
+  for existing_path in "${current_paths[@]}"; do
+    [[ "${existing_path}" != "${path_to_remove}" ]] && updated_paths+=("${existing_path}")
+  done
+  eval "${array_name}=()"
+  for existing_path in "${updated_paths[@]}"; do
+    eval "${array_name}+=(\"\${existing_path}\")"
+  done
+}
+
+add_path_if_missing() {
+  local array_name="$1"
+  local candidate_path="$2"
+  if ! path_in_array "${array_name}" "${candidate_path}"; then
+    eval "${array_name}+=(\"\${candidate_path}\")"
+  fi
 }
 
 remove_from_playlist() {
   local video_to_remove="$1"
   debug_log "Removing from playlist: ${video_to_remove}"
-  local new_playlist=()
-  for v in "${PLAYLIST[@]}"; do
-    [[ "${v}" != "${video_to_remove}" ]] && new_playlist+=("${v}")
-  done
-  PLAYLIST=("${new_playlist[@]}")
+  remove_path_from_array "PLAYLIST" "${video_to_remove}"
   debug_log "Playlist now has ${#PLAYLIST[@]} entries"
+}
+
+remove_from_played_history() {
+  local video_to_remove="$1"
+  debug_log "Removing from played history: ${video_to_remove}"
+  remove_path_from_array "PLAYED_HISTORY" "${video_to_remove}"
+  debug_log "Played history now has ${#PLAYED_HISTORY[@]} entries"
 }
 
 # Check if a video file exists
@@ -475,47 +869,227 @@ validate_video_file() {
   [[ -f "${video_path}" ]]
 }
 
+path_should_skip_validation() {
+  local video_path="$1"
+  local directory_path=""
+  for directory_path in "${UNSCANNABLE_DIRECTORY_PATHS[@]}"; do
+    if video_matches_directory "${video_path}" "${directory_path}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+compact_tracked_paths() {
+  local array_name="$1"
+  local current_paths=()
+  local compacted_paths=()
+  local video_path=""
+  local removed_count=0
+
+  eval "current_paths=(\"\${${array_name}[@]}\")"
+  for video_path in "${current_paths[@]}"; do
+    [[ -n "${video_path}" ]] || continue
+    if path_in_array "compacted_paths" "${video_path}"; then
+      continue
+    fi
+    if path_should_skip_validation "${video_path}" || validate_video_file "${video_path}"; then
+      compacted_paths+=("${video_path}")
+    else
+      removed_count=$((removed_count + 1))
+    fi
+  done
+
+  eval "${array_name}=()"
+  for video_path in "${compacted_paths[@]}"; do
+    eval "${array_name}+=(\"\${video_path}\")"
+  done
+
+  LAST_COMPACT_REMOVED_COUNT="${removed_count}"
+}
+
+refresh_scanned_videos() {
+  local scan_label="${1:-Scanning library}"
+  scan_videos_with_progress "${scan_label}"
+}
+
+resync_state_with_scan() {
+  local scan_label="${1:-Scanning library}"
+  local playlist_stale_count=0
+  local played_stale_count=0
+  local new_count=0
+  local file=""
+
+  compact_tracked_paths "PLAYLIST"
+  playlist_stale_count="${LAST_COMPACT_REMOVED_COUNT}"
+  compact_tracked_paths "PLAYED_HISTORY"
+  played_stale_count="${LAST_COMPACT_REMOVED_COUNT}"
+
+  refresh_scanned_videos "${scan_label}"
+
+  for file in "${SCANNED_VIDEOS[@]}"; do
+    if ! path_in_array "PLAYLIST" "${file}" && ! path_in_array "PLAYED_HISTORY" "${file}"; then
+      PLAYLIST+=("${file}")
+      new_count=$((new_count + 1))
+    fi
+  done
+
+  if [[ ${playlist_stale_count} -gt 0 ]] || [[ ${played_stale_count} -gt 0 ]] || [[ ${new_count} -gt 0 ]]; then
+    mark_state_dirty
+  fi
+
+  debug_log "Resynced state: removed ${playlist_stale_count} stale playlist entries, ${played_stale_count} stale played entries, added ${new_count} new video(s)"
+}
+
+save_state_files() {
+  if [[ "${STATE_DIRTY}" != true ]] && ! state_files_missing; then
+    debug_log "State unchanged, skipping save"
+    return 0
+  fi
+
+  save_playlist "${PLAYLIST_FILE}" "${PLAYLIST_BASE_DIR}"
+  save_played_history "${PLAYED_FILE}" "${PLAYLIST_BASE_DIR}"
+  STATE_DIRTY=false
+}
+
+mark_video_as_played() {
+  local video_path="$1"
+  local playlist_count_before=${#PLAYLIST[@]}
+  local played_count_before=${#PLAYED_HISTORY[@]}
+  remove_from_playlist "${video_path}"
+  add_path_if_missing "PLAYED_HISTORY" "${video_path}"
+  if [[ ${#PLAYLIST[@]} -ne ${playlist_count_before} ]] || [[ ${#PLAYED_HISTORY[@]} -ne ${played_count_before} ]]; then
+    mark_state_dirty
+  fi
+}
+
+remove_video_from_state() {
+  local video_path="$1"
+  local playlist_count_before=${#PLAYLIST[@]}
+  local played_count_before=${#PLAYED_HISTORY[@]}
+  remove_from_playlist "${video_path}"
+  remove_from_played_history "${video_path}"
+  if [[ ${#PLAYLIST[@]} -ne ${playlist_count_before} ]] || [[ ${#PLAYED_HISTORY[@]} -ne ${played_count_before} ]]; then
+    mark_state_dirty
+  fi
+}
+
+count_playlist_videos_for_directory() {
+  local directory_path="$1"
+  local count=0
+  local video=""
+  for video in "${PLAYLIST[@]}"; do
+    if video_matches_directory "${video}" "${directory_path}"; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s\n' "${count}"
+}
+
+print_playlist_directory_counts() {
+  [[ ${#DIRECTORY_PATHS[@]} -gt 0 ]] || return 0
+
+  echo "Video counts by directory:"
+  local directory_path=""
+  local count=0
+  for directory_path in "${DIRECTORY_PATHS[@]}"; do
+    count=$(count_playlist_videos_for_directory "${directory_path}")
+    echo "  - ${directory_path}: ${count}"
+  done
+}
+
+video_matches_directory() {
+  local video_path="$1"
+  local directory_path="$2"
+  case "${video_path}" in
+    "${directory_path}"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+select_playlist_index() {
+  if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  local selected_index=-1
+
+  if [[ -n "${ARG_SHUFFLE}" ]] || [[ ${#DIRECTORY_PATHS[@]} -le 1 ]]; then
+    selected_index=$((RANDOM % ${#PLAYLIST[@]}))
+    debug_log "Shuffle selection enabled, chose index ${selected_index} of ${#PLAYLIST[@]}"
+    printf '%s\n' "${selected_index}"
+    return 0
+  fi
+
+  local directory_path=""
+  local candidate_indexes=()
+  local i
+  for directory_path in "${DIRECTORY_PATHS[@]}"; do
+    candidate_indexes=()
+    for ((i = 0; i < ${#PLAYLIST[@]}; i++)); do
+      if video_matches_directory "${PLAYLIST[${i}]}" "${directory_path}"; then
+        candidate_indexes+=("${i}")
+      fi
+    done
+
+    if [[ ${#candidate_indexes[@]} -gt 0 ]]; then
+      selected_index="${candidate_indexes[$((RANDOM % ${#candidate_indexes[@]}))]}"
+      debug_log "Directory-priority selection chose index ${selected_index} from ${#candidate_indexes[@]} candidate(s) in ${directory_path}"
+      printf '%s\n' "${selected_index}"
+      return 0
+    fi
+  done
+
+  selected_index=$((RANDOM % ${#PLAYLIST[@]}))
+  debug_log "No configured directory match found, falling back to shuffled index ${selected_index}"
+  printf '%s\n' "${selected_index}"
+}
+
 # Clean stale entries from playlist and exit
 clean_playlist() {
   local total_count=${#PLAYLIST[@]}
+  local total_played_count=${#PLAYED_HISTORY[@]}
+  local stale_playlist_count=0
+  local stale_played_count=0
 
   # Check if playlist is empty
-  if [[ ${total_count} -eq 0 ]]; then
+  if [[ ${total_count} -eq 0 ]] && [[ ${total_played_count} -eq 0 ]]; then
     echo "No playlist found. Run without --clean to scan and create a playlist first."
     exit 0
   fi
 
-  local stale_count=0
-  local valid_videos=()
+  debug_log "Starting state cleaning (${total_count} playlist entries, ${total_played_count} played entries)"
+  echo "Validating tracked videos..."
 
-  debug_log "Starting playlist cleaning (${total_count} entries)"
-  echo "Validating ${total_count} videos..."
-
-  # Build list of valid videos
-  for video in "${PLAYLIST[@]}"; do
-    if validate_video_file "${video}"; then
-      valid_videos+=("${video}")
-    else
-      debug_log "Stale entry found: ${video}"
-      stale_count=$((stale_count + 1))
-    fi
-  done
-
-  # Update playlist with only valid entries
-  PLAYLIST=("${valid_videos[@]}")
-  save_playlist "${PLAYLIST_FILE}" "${DIRECTORY_PATH}"
+  compact_tracked_paths "PLAYLIST"
+  stale_playlist_count="${LAST_COMPACT_REMOVED_COUNT}"
+  compact_tracked_paths "PLAYED_HISTORY"
+  stale_played_count="${LAST_COMPACT_REMOVED_COUNT}"
+  if [[ ${stale_playlist_count} -gt 0 ]] || [[ ${stale_played_count} -gt 0 ]]; then
+    mark_state_dirty
+  fi
+  save_state_files
 
   # Report results
   local remaining_count=${#PLAYLIST[@]}
+  local remaining_played_count=${#PLAYED_HISTORY[@]}
+  local stale_count=$((stale_playlist_count + stale_played_count))
   echo ""
   if [[ ${stale_count} -eq 0 ]]; then
-    echo -e "${GREEN}Playlist is clean - all ${remaining_count} videos exist.${NC}"
+    echo -e "${GREEN}State is clean - ${remaining_count} playlist videos and ${remaining_played_count} played videos exist.${NC}"
   else
-    echo -e "${GREEN}Cleaned ${stale_count} stale entries, ${remaining_count} videos remaining.${NC}"
+    echo -e "${GREEN}Cleaned ${stale_count} stale entries, ${remaining_count} playlist videos and ${remaining_played_count} played videos remaining.${NC}"
   fi
 
   exit 0
 }
+
+if [[ -n "${ROULETTE_SOURCE_ONLY:-}" ]]; then
+  if (return 0 2>/dev/null); then
+    return 0
+  fi
+  exit 0
+fi
 
 # === MAIN ===
 
@@ -528,53 +1102,133 @@ echo "   Version ${VERSION}"
 echo ""
 echo -e "${NC}"
 
-DIRECTORY_PATH=""
 USER_PROVIDED_PATH=""
-
-if [[ -n "${ARG_DIRECTORY}" ]]; then
-  USER_PROVIDED_PATH="${ARG_DIRECTORY}"
-  USER_PROVIDED_PATH="${USER_PROVIDED_PATH/#\~/${HOME}}"
-  if [[ ! -d "${USER_PROVIDED_PATH}" ]]; then
-    echo -e "${RED}ERROR:${NC} Directory not found: ${USER_PROVIDED_PATH}"
-    exit 1
-  fi
-  DIRECTORY_PATH="${USER_PROVIDED_PATH}"
-  echo "Using provided directory: ${DIRECTORY_PATH}"
-fi
 
 detect_macos
 detect_wsl
 
-if [[ -z "${USER_PROVIDED_PATH}" ]]; then
+if [[ ${#ARG_DIRECTORIES[@]} -gt 0 ]]; then
+  DIRECTORY_PATHS=()
+  for USER_PROVIDED_PATH in "${ARG_DIRECTORIES[@]}"; do
+    local_normalized_path=""
+    if ! local_normalized_path=$(normalize_directory_path "${USER_PROVIDED_PATH}"); then
+      echo -e "${RED}ERROR:${NC} Directory not found: ${USER_PROVIDED_PATH/#\~/${HOME}}"
+      exit 1
+    fi
+    add_directory_path "${local_normalized_path}"
+  done
+  DIRECTORY_PATH="${DIRECTORY_PATHS[0]}"
+  print_directory_selection "Using provided"
+else
   detect_media_directory
 fi
 
 check_and_install_mpv
 
-# Playlist file lives in the media directory
-PLAYLIST_FILE="${DIRECTORY_PATH}/.roulette_playlist"
+classify_directory_scan_access
+
+configure_playlist_storage
 
 # Load or create playlist
-if [[ -f "${PLAYLIST_FILE}" ]] && [[ -z "${ARG_RESET}" ]]; then
-  load_playlist "${PLAYLIST_FILE}" "${DIRECTORY_PATH}"
-  echo "Loaded playlist: ${#PLAYLIST[@]} videos remaining"
-else
+playlist_loaded=false
+played_history_loaded=false
+
+if [[ -z "${ARG_RESET}" ]]; then
+  if load_playlist "${PLAYLIST_FILE}" "${PLAYLIST_BASE_DIR}"; then
+    playlist_loaded=true
+  fi
+  if load_played_history "${PLAYED_FILE}" "${PLAYLIST_BASE_DIR}"; then
+    played_history_loaded=true
+  fi
+fi
+
+if [[ -n "${ARG_RESET}" ]]; then
   if [[ -n "${ARG_RESET}" ]]; then
     debug_log "Reset flag provided, rebuilding playlist"
   fi
-  echo "Scanning directory: ${DIRECTORY_PATH}"
+  if [[ ${#UNSCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]]; then
+    print_unscannable_directory_warning
+  fi
+  if [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -eq 0 ]]; then
+    echo -e "${RED}ERROR:${NC} None of the configured source directories are currently scannable."
+    echo "Restore directory access and retry."
+    exit 1
+  fi
+
   PLAYLIST=()
-  while IFS= read -r -d '' file; do
-    PLAYLIST+=("${file}")
-  done < <(list_videos)
+  PLAYED_HISTORY=()
+  mark_state_dirty
+  if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
+    echo "Scanning directory: ${DIRECTORY_PATH}"
+  else
+    echo "Scanning ${#DIRECTORY_PATHS[@]} directories..."
+  fi
+
+  refresh_scanned_videos
+  PLAYLIST=("${SCANNED_VIDEOS[@]}")
+  if [[ ${#PLAYLIST[@]} -gt 0 ]]; then
+    mark_state_dirty
+  fi
 
   if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
+    save_state_files
     echo "No video files found."
     exit 0
   fi
 
-  save_playlist "${PLAYLIST_FILE}" "${DIRECTORY_PATH}"
+  save_state_files
   echo "Found ${#PLAYLIST[@]} videos, saved playlist."
+  print_playlist_directory_counts
+else
+  if [[ ${#UNSCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]]; then
+    print_unscannable_directory_warning
+    if [[ "${playlist_loaded}" == true ]]; then
+      echo "Loaded playlist may be stale. New scan will skip inaccessible directories."
+    fi
+  fi
+
+  if [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -eq 0 ]]; then
+    if [[ "${playlist_loaded}" == true ]]; then
+      echo "Loaded playlist: ${#PLAYLIST[@]} videos remaining"
+      print_playlist_directory_counts
+    else
+      echo -e "${RED}ERROR:${NC} None of the configured source directories are currently scannable."
+      echo "Restore directory access and retry."
+      exit 1
+    fi
+  else
+    if [[ "${playlist_loaded}" == true ]] || [[ "${played_history_loaded}" == true ]]; then
+      resync_state_with_scan
+      save_state_files
+
+      if [[ "${playlist_loaded}" == true ]]; then
+        echo "Loaded playlist: ${#PLAYLIST[@]} videos remaining"
+      else
+        echo "Loaded played history: ${#PLAYED_HISTORY[@]} videos tracked"
+      fi
+      print_playlist_directory_counts
+    else
+      if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
+        echo "Scanning directory: ${DIRECTORY_PATH}"
+      else
+        echo "Scanning ${#DIRECTORY_PATHS[@]} directories..."
+      fi
+
+      resync_state_with_scan
+      if [[ ${#PLAYLIST[@]} -gt 0 ]]; then
+        mark_state_dirty
+      fi
+
+      if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
+        echo "No video files found."
+        exit 0
+      fi
+
+      save_state_files
+      echo "Found ${#PLAYLIST[@]} videos, saved playlist."
+      print_playlist_directory_counts
+    fi
+  fi
 fi
 
 # If clean mode is enabled, validate and clean playlist then exit
@@ -584,13 +1238,18 @@ fi
 
 open_random_video() {
   if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
-    echo "Playlist empty - all videos played!"
-    echo "Use --reset to rebuild the playlist."
-    return 1
+    if try_refill_playlist; then
+      echo "Found new videos during rescan."
+    else
+      echo "Playlist empty - all videos played!"
+      echo "Use --reset to rebuild the playlist."
+      return 1
+    fi
   fi
 
   echo -e "${DIM}${#PLAYLIST[@]} videos remaining.${NC}"
-  local random_index=$((RANDOM % ${#PLAYLIST[@]}))
+  local random_index
+  random_index=$(select_playlist_index) || return 1
   random_video="${PLAYLIST[${random_index}]}"
   debug_log "Selected index ${random_index} of ${#PLAYLIST[@]}: ${random_video}"
 
@@ -599,7 +1258,7 @@ open_random_video() {
     debug_log "File not found, removing stale entry"
     echo "Video no longer exists, removing: ${random_video}"
     remove_from_playlist "${random_video}"
-    save_playlist "${PLAYLIST_FILE}" "${DIRECTORY_PATH}"
+    save_state_files
     return 2 # Signal to retry
   fi
 
@@ -618,14 +1277,13 @@ while true; do
     # File not found, auto-retry
     continue
   elif [[ ${result} -eq 0 ]]; then
-    # Track if video should be removed from playlist
-    should_remove=false
+    video_state="keep"
 
     # Check if video was watched enough to auto-remove
     if is_video_watched_enough; then
       echo ""
       echo -e "${GREEN}Video watched (${LAST_PLAYBACK_PERCENT}%)${NC} - removed from playlist."
-      should_remove=true
+      video_state="watched"
     else
       echo ""
       echo -e "${YELLOW}Video skipped (${LAST_PLAYBACK_PERCENT}%)${NC} - keeping in playlist."
@@ -641,6 +1299,7 @@ while true; do
       case "${user_input}" in
         q | Q)
           debug_log "Action: quit"
+          persist_video_state_if_needed "${video_state}" "${random_video}"
           echo "Goodbye!"
           exit 0
           ;;
@@ -691,7 +1350,7 @@ while true; do
               debug_log "Action: confirmed delete"
               if rm "${random_video}" 2>/dev/null; then
                 echo -e "${GREEN}File deleted.${NC}"
-                should_remove=true
+                video_state="deleted"
               else
                 echo -e "${RED}Failed to delete file.${NC} Check permissions."
               fi
@@ -699,6 +1358,7 @@ while true; do
               ;;
             q | Q)
               debug_log "Action: quit from delete"
+              persist_video_state_if_needed "${video_state}" "${random_video}"
               echo "Goodbye!"
               exit 0
               ;;
@@ -720,11 +1380,8 @@ while true; do
       esac
     done
 
-    # Remove from playlist if watched or deleted
-    if [[ "${should_remove}" == true ]]; then
-      remove_from_playlist "${random_video}"
-      save_playlist "${PLAYLIST_FILE}" "${DIRECTORY_PATH}"
-    fi
+    # Persist watched/delete state after action loop
+    persist_video_state_if_needed "${video_state}" "${random_video}"
   else
     echo ""
     echo -e -n "[${DIM}r${NC}]etry  [${CYAN}q${NC}]uit: "

@@ -8,7 +8,7 @@
 
 > ⚠️ **Disclaimer:** This tool can permanently delete files. Use at your own discretion. I am not responsible for any inadvertently lost data.
 
-Play "Russian Roulette" with your video collection. It recursively finds video files in a specified directory and plays one at random using `mpv` with prompts to keep or delete before moving on to next video.
+Play "Russian Roulette" with your video collection. It recursively finds video files in one or more directories and, by default, works through directories in the order configured while choosing randomly within the current directory. Use `--shuffle` to mix all videos across directories.
 
 ## Why?
 
@@ -19,17 +19,20 @@ I built this out of a need to tackle my ever-growing video collection. With coun
 ## Features
 
 - **Cross-Platform**: Works on macOS, Linux, and WSL (Windows Subsystem for Linux)
-- **Custom Directory**: Optionally specify any directory to search
+- **Custom Directories**: Optionally specify one or more directories to search
 - **Recursive Search**: Finds videos in all subdirectories
 - **Auto-Install**: Installs `mpv` via Homebrew if not present (macOS/Linux)
 - **Interactive Menu**:
-  - `[N]ext` - Play another random video (default)
+  - `[N]ext` - Play another video from the current directory priority group
   - `[r]eplay` - Replay the current video
   - `[i]nfo` - Show media information (requires `mediainfo`)
   - `[d]elete` - Delete the current video file (with confirmation)
   - `[q]uit` - Exit the script
+- **Directory Priority**: When multiple source directories are configured, earlier directories are exhausted before later ones
+- **Shuffle Mode**: Use `--shuffle` to randomize across all configured directories
 - **Format Support**: Supports common video extensions: `mp4`, `avi`, `mkv`, `mov`, `wmv`, `flv`, `webm`, `m4v`, `mpg`, `mpeg`
 - **Environment Variables**: Customize mpv behavior with `MPV_GEOMETRY` and `MPV_VOLUME`
+- **MPV Env Override**: Use `--bypass` to ignore all `MPV_*` playback env vars for a run
 
 ## Prerequisites
 
@@ -57,7 +60,7 @@ I built this out of a need to tackle my ever-growing video collection. With coun
 ## Usage
 
 ```bash
-roulette [DIRECTORY]
+roulette [DIRECTORY ...]
 ❯ roulette --debug
     ----------------░░░░░░░-----------------
     ---.--'-'''.---░░]▄▄▄▄▄░░--`'''''-'-''''
@@ -131,7 +134,12 @@ You can modify the `detect_media_directory` function in `bin/roulette` to custom
 
 | Variable       | Description                                   |
 | -------------- | --------------------------------------------- |
+| `ROULETTE_PATH` | Set one or more source directories (`:` separated for multiple paths) |
 | `MPV_GEOMETRY` | Set mpv window geometry (e.g., `50%x50%+0+0` for half-screen top-left) |
+| `MPV_VOLUME` | Set default volume (0-100) |
+| `MPV_FULLSCREEN` | Start playback in fullscreen mode when set |
+
+Use `--bypass` to ignore `MPV_GEOMETRY`, `MPV_VOLUME`, and `MPV_FULLSCREEN` for a single run.
 
 ## Future Enhancements
 
@@ -192,12 +200,12 @@ sudo apt-get install bats
 **Run tests:**
 
 ```bash
-make test          # Run legacy shell tests
-make test-bats     # Run comprehensive BATS test suite
-make test-all      # Run all tests
+make test                          # Run the BATS suite with colored pretty output
+make test BATS_FORMATTER=tap       # Switch to TAP output
+make test BATS_FLAGS='--formatter tap --timing'
 ```
 
-The BATS test suite includes 62+ tests covering:
+The BATS test suite includes 67+ tests covering:
 
 - Help and version commands
 - Directory validation and video discovery

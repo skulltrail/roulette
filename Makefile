@@ -4,6 +4,9 @@ SHELL := /bin/bash
 BIN_DIR := bin
 SHELLCHECK := $(BIN_DIR)/shellcheck
 SHFMT := $(BIN_DIR)/shfmt
+BATS ?= bats
+BATS_FORMATTER ?= pretty
+BATS_FLAGS ?= --formatter $(BATS_FORMATTER)
 
 # Shell files to check
 SHELL_FILES := roulette $(wildcard scripts/*.sh) $(wildcard tests/*.bats)
@@ -23,8 +26,8 @@ build: $(SHFMT) ## Format the roulette script
 
 test: ## Run BATS test suite
 	@echo "Running tests..."
-	@if command -v bats >/dev/null 2>&1; then \
-		bats tests/test_roulette.bats; \
+	@if command -v $(BATS) >/dev/null 2>&1; then \
+		$(BATS) $(BATS_FLAGS) tests/test_roulette.bats; \
 	else \
 		echo "Error: BATS not found. Install with: brew install bats-core"; \
 		exit 1; \
