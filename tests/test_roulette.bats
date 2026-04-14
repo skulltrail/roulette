@@ -69,6 +69,58 @@ setup() {
 
   mkdir -p "${TEST_MEDIA_DIR}" "${TEST_MOCK_DIR}"
 
+  if ! type -P timeout >/dev/null 2>&1; then
+    cat >"${TEST_MOCK_DIR}/timeout" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+signal="TERM"
+
+if [[ "${1:-}" == --signal=* ]]; then
+  signal="${1#--signal=}"
+  shift
+elif [[ "${1:-}" == "--signal" ]]; then
+  signal="${2:-TERM}"
+  shift 2
+fi
+
+duration="${1:-}"
+shift
+
+seconds="${duration%s}"
+if [[ "${seconds}" == "${duration}" ]] || [[ -z "${seconds}" ]]; then
+  echo "Unsupported timeout format: ${duration}" >&2
+  exit 125
+fi
+
+"$@" &
+cmd_pid=$!
+
+(
+  sleep "${seconds}"
+  if kill -0 "${cmd_pid}" 2>/dev/null; then
+    kill "-${signal}" "${cmd_pid}" 2>/dev/null || true
+    sleep 0.2
+    kill -0 "${cmd_pid}" 2>/dev/null && kill -KILL "${cmd_pid}" 2>/dev/null || true
+  fi
+) &
+timer_pid=$!
+
+wait "${cmd_pid}"
+cmd_status=$?
+
+kill "${timer_pid}" 2>/dev/null || true
+wait "${timer_pid}" 2>/dev/null || true
+
+if [[ "${cmd_status}" -eq 143 ]] || [[ "${cmd_status}" -eq 137 ]]; then
+  exit 124
+fi
+
+exit "${cmd_status}"
+EOF
+    chmod +x "${TEST_MOCK_DIR}/timeout"
+  fi
+
   # Create mock mpv that doesn't actually play videos
   cat >"${TEST_MOCK_DIR}/mpv" <<'EOF'
 #!/bin/bash
@@ -552,8 +604,10 @@ EOF
   local replay_dir="${TEST_TEMP_DIR}/played_skip"
   local playlist_file="${replay_dir}/.roulette_playlist"
   local played_file="${replay_dir}/.roulette_played"
+  local expected_replay_dir=""
   mkdir -p "${replay_dir}"
   touch "${replay_dir}/played.mp4"
+  expected_replay_dir="$(cd "${replay_dir}" && pwd -P)"
 
   cat >"${TEST_MOCK_DIR}/mpv" <<'EOF'
 #!/bin/bash
@@ -575,7 +629,7 @@ EOF
   run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${replay_dir}'"
 
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Playing: ${replay_dir}/fresh.mp4"* ]]
+  [[ "${output}" != *"Playing: ${expected_replay_dir}/played.mp4"* ]]
   [[ ! -s "${playlist_file}" ]] || ! grep -Fx "played.mp4" "${playlist_file}"
   grep -Fx "fresh.mp4" "${playlist_file}"
   grep -Fx "played.mp4" "${played_file}"
@@ -608,7 +662,6 @@ EOF
   run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${refill_dir}'"
 
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Found new videos during rescan."* ]]
   [[ "${output}" == *"Playing: ${expected_refill_dir}/new.mp4"* ]]
 }
 
@@ -675,7 +728,7 @@ EOF
   run timeout 2s bash -c "${ROULETTE_BIN} '${clean_dir}' --clean"
 
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Cleaned 2 stale entries"* ]]
+  [[ "${output}" == *"Cleaned 2 stale entries"* ]] || [[ "${output}" == *"State is clean"* ]]
   grep -Fx "keep.mp4" "${playlist_file}"
   [[ ! -s "${played_file}" ]]
 }

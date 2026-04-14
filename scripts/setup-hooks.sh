@@ -203,6 +203,35 @@ echo -e "${GREEN}All pre-commit checks passed!${NC}"
 HOOK
   chmod +x "${hooks_dir}/pre-commit"
 
+  # Create pre-push hook
+  cat >"${hooks_dir}/pre-push" <<'HOOK'
+#!/usr/bin/env bash
+#
+# Pre-push hook: runs local equivalents of CI workflows before push.
+#
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo "Running pre-push CI checks..."
+
+if ! make -C "${REPO_ROOT}" ci-local; then
+    echo ""
+    echo -e "${RED}Pre-push CI checks failed!${NC}"
+    echo "Fix the issues above before pushing."
+    exit 1
+fi
+
+echo -e "${GREEN}All pre-push CI checks passed!${NC}"
+HOOK
+  chmod +x "${hooks_dir}/pre-push"
+
   # Create commit-msg hook for conventional commits
   cat >"${hooks_dir}/commit-msg" <<'HOOK'
 #!/usr/bin/env bash
@@ -327,6 +356,12 @@ main() {
     printf "  ${SYM_OK} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "commit-msg" "git hook"
   else
     printf "  ${SYM_FAIL} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "commit-msg" "git hook"
+  fi
+
+  if [[ -x "${REPO_ROOT}/.git/hooks/pre-push" ]]; then
+    printf "  ${SYM_OK} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "pre-push" "git hook"
+  else
+    printf "  ${SYM_FAIL} ${BOLD}%-12s${NC} ${DIM}%s${NC}\n" "pre-push" "git hook"
   fi
 
   echo -e "${CYAN}───────────────────────────────────${NC}"

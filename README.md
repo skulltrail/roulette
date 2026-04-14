@@ -168,6 +168,7 @@ This will:
 
 - Install `shellcheck` and `shfmt` locally to `bin/`
 - Set up a pre-commit hook that lints and checks formatting of shell scripts
+- Set up a pre-push hook that runs the locally-runnable CI workflow checks
 - Set up a commit-msg hook that enforces [Conventional Commits](https://www.conventionalcommits.org/) format
 
 ### Make Targets
@@ -176,6 +177,7 @@ This will:
 make help          # Show all available targets
 make setup         # Install dev tools and git hooks
 make check         # Run all pre-commit checks (lint + format check)
+make ci-local      # Run local equivalents of CI workflows before pushing
 make lint          # Run shellcheck on all shell files
 make format        # Format all shell files with shfmt
 make format-check  # Check formatting without modifying files
@@ -203,7 +205,15 @@ sudo apt-get install bats
 make test                          # Run the BATS suite with colored pretty output
 make test BATS_FORMATTER=tap       # Switch to TAP output
 make test BATS_FLAGS='--formatter tap --timing'
+make ci-local                      # Run local CI-equivalent checks, including headless test mode
 ```
+
+`make ci-local` runs the locally-runnable equivalents of the GitHub Actions workflows:
+
+- lint + format checks
+- release metadata validation
+- coverage job smoke checks
+- test suite in headless mode (`TERM=dumb`) to catch CI-only formatting issues early
 
 The BATS test suite includes 67+ tests covering:
 

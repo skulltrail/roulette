@@ -1,4 +1,4 @@
-.PHONY: all test lint format check setup build help
+.PHONY: all test lint format check setup build help coverage-check release-check ci-local
 
 SHELL := /bin/bash
 BIN_DIR := bin
@@ -33,6 +33,30 @@ test: ## Run BATS test suite
 		echo "Error: BATS not found. Install with: brew install bats-core"; \
 		exit 1; \
 	fi
+
+coverage-check: ## Run local equivalent of CI coverage job
+	@echo "Running coverage workflow checks..."
+	@if command -v $(BATS) >/dev/null 2>&1; then \
+		report_file="$$(mktemp)"; \
+		trap 'rm -f "$$report_file"' EXIT; \
+		$(BATS) --formatter tap tests/test_roulette.bats > "$$report_file"; \
+		test -s "$$report_file"; \
+		$(BATS) --count tests/test_roulette.bats >/dev/null; \
+	else \
+		echo "Error: BATS not found. Install with: brew install bats-core"; \
+		exit 1; \
+	fi
+	@echo "Coverage workflow checks passed!"
+
+release-check: ## Validate local release metadata used by CI
+	@echo "Validating release workflow inputs..."
+	@bash scripts/validate-release-state.sh
+
+ci-local: lint format-check release-check coverage-check ## Run all locally-runnable CI workflow checks
+	@echo "Running local test workflow (headless mode)..."
+	@TERM=dumb $(MAKE) test
+	@echo ""
+	@printf '\033[32mLocal CI workflow checks passed!\033[0m\n'
 
 lint: $(SHELLCHECK) ## Run shellcheck on all shell files
 	@echo "Running shellcheck..."
