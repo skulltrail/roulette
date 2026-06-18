@@ -8,7 +8,7 @@
 
 > ⚠️ **Disclaimer:** This tool can permanently delete files. Use at your own discretion. I am not responsible for any inadvertently lost data.
 
-Play "Russian Roulette" with your video collection. It recursively finds video files in one or more directories and, by default, works through directories in the order configured while choosing randomly within the current directory. Use `--shuffle` to mix all videos across directories.
+Play "Russian Roulette" with your video collection. It recursively finds video files in one or more directories and, by default, works through directories in the order configured while choosing randomly within the current directory. Use `--shuffle` to mix all videos across directories, and `--scan` when you want to refresh an existing playlist from disk.
 
 ## Why?
 
@@ -26,10 +26,12 @@ I built this out of a need to tackle my ever-growing video collection. With coun
   - `[N]ext` - Play another video from the current directory priority group
   - `[r]eplay` - Replay the current video
   - `[i]nfo` - Show media information (requires `mediainfo`)
+  - `[p]romote` - Move current video from downloads root to main root and mark it played
   - `[d]elete` - Delete the current video file (with confirmation)
   - `[q]uit` - Exit the script
 - **Directory Priority**: When multiple source directories are configured, earlier directories are exhausted before later ones
 - **Shuffle Mode**: Use `--shuffle` to randomize across all configured directories
+- **Optional Rescan**: Existing playlists stay put unless you run with `--scan` (first run still bootstraps a playlist automatically)
 - **Format Support**: Supports common video extensions: `mp4`, `avi`, `mkv`, `mov`, `wmv`, `flv`, `webm`, `m4v`, `mpg`, `mpeg`
 - **Environment Variables**: Customize mpv behavior with `MPV_GEOMETRY` and `MPV_VOLUME`
 - **MPV Env Override**: Use `--bypass` to ignore all `MPV_*` playback env vars for a run
@@ -124,7 +126,7 @@ The script attempts to automatically detect your media directory based on your e
 
 | Environment | Default Paths                                                                    |
 | ----------- | -------------------------------------------------------------------------------- |
-| macOS       | `/Volumes/media/archive/video`                                                   |
+| macOS       | `/Volumes/media/downloads/video`, `/Volumes/media/archive/video`                 |
 | WSL         | `/mnt/media/archive/video`, `/media/archive/video`, `/mnt/m/media/archive/video` |
 | Linux       | `/media/archive/video`, `/mnt/media/archive/video`                               |
 
@@ -132,9 +134,11 @@ You can modify the `detect_media_directory` function in `bin/roulette` to custom
 
 ### Environment Variables
 
-| Variable       | Description                                   |
-| -------------- | --------------------------------------------- |
+| Variable | Description |
+| -------- | ----------- |
 | `ROULETTE_PATH` | Set one or more source directories (`:` separated for multiple paths) |
+| `ROULETTE_DOWNLOADS_PATH` | Override source root used by `[p]romote` |
+| `ROULETTE_MAIN_PATH` | Override destination root used by `[p]romote` |
 | `MPV_GEOMETRY` | Set mpv window geometry (e.g., `50%x50%+0+0` for half-screen top-left) |
 | `MPV_VOLUME` | Set default volume (0-100) |
 | `MPV_FULLSCREEN` | Start playback in fullscreen mode when set |

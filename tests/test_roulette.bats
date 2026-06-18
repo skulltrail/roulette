@@ -59,7 +59,7 @@ setup() {
   export BATS_TEST_DIRNAME
   PROJECT_ROOT="$(dirname "${BATS_TEST_DIRNAME}")"
   export PROJECT_ROOT
-  export ROULETTE_BIN="${PROJECT_ROOT}/roulette"
+  export ROULETTE_BIN="${PROJECT_ROOT}/bin/roulette"
 
   # Create temporary test directories
   TEST_TEMP_DIR="$(mktemp -d)"
@@ -227,6 +227,12 @@ create_test_videos() {
   run "${ROULETTE_BIN}" --help
   [[ "${status}" -eq 0 ]]
   [[ "${output}" =~ "--shuffle" ]]
+}
+
+@test "roulette help shows scan flag" {
+  run "${ROULETTE_BIN}" --help
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" =~ "--scan" ]]
 }
 
 # ======================================================================
@@ -514,9 +520,11 @@ create_test_videos() {
   local dir_b="${TEST_TEMP_DIR}/warn_unreadable_b"
   local state_dir="${TEST_TEMP_DIR}/state"
   local actual_find
+  local expected_dir_b=""
   mkdir -p "${dir_a}" "${dir_b}" "${state_dir}"
   touch "${dir_a}/video1.mp4"
   touch "${dir_b}/video2.mp4"
+  expected_dir_b="$(cd "${dir_b}" && pwd -P)"
 
   env XDG_STATE_HOME="${state_dir}" timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${dir_a}' '${dir_b}'" || true
   actual_find="$(command -v find)"
@@ -536,6 +544,41 @@ EOF
   [[ "${output}" == *"WARNING: Unable to scan source directories:"* ]]
   [[ "${output}" == *"Loaded playlist may be stale."* ]]
   [[ "${output}" == *"Video counts by directory:"* ]]
+  [[ "${output}" == *"${dir_a}: 0"* ]]
+  [[ "${output}" == *"${dir_b}: 1"* ]]
+  [[ "${output}" == *"Playing: ${expected_dir_b}/video2.mp4"* ]]
+}
+
+@test "roulette exits clearly when loaded playlist has no selectable videos because all source directories are inaccessible" {
+  local dir_a="${TEST_TEMP_DIR}/warn_all_unreadable_a"
+  local dir_b="${TEST_TEMP_DIR}/warn_all_unreadable_b"
+  local state_dir="${TEST_TEMP_DIR}/state"
+  local actual_find
+  mkdir -p "${dir_a}" "${dir_b}" "${state_dir}"
+  touch "${dir_a}/video1.mp4"
+  touch "${dir_b}/video2.mp4"
+
+  env XDG_STATE_HOME="${state_dir}" timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${dir_a}' '${dir_b}'" || true
+  actual_find="$(command -v find)"
+  cat >"${TEST_MOCK_DIR}/find" <<EOF
+#!/bin/bash
+if [[ "\$*" == *"${dir_a}"* ]] || [[ "\$*" == *"${dir_b}"* ]]; then
+  echo "find: \$1: Operation not permitted" >&2
+  exit 1
+fi
+exec "${actual_find}" "\$@"
+EOF
+  chmod +x "${TEST_MOCK_DIR}/find"
+
+  run env XDG_STATE_HOME="${state_dir}" timeout 2s bash -c "${ROULETTE_BIN} '${dir_a}' '${dir_b}'"
+
+  [[ "${status}" -ne 0 ]]
+  [[ "${output}" == *"WARNING: Unable to scan source directories:"* ]]
+  [[ "${output}" == *"Loaded playlist may be stale."* ]]
+  [[ "${output}" == *"Loaded playlist: 0 selectable videos remaining (2 tracked)"* ]]
+  [[ "${output}" == *"${dir_a}: 0"* ]]
+  [[ "${output}" == *"${dir_b}: 0"* ]]
+  [[ "${output}" == *"No selectable videos remain while source directories are inaccessible."* ]]
 }
 
 @test "roulette errors when no configured source directories are scannable" {
@@ -583,8 +626,30 @@ EOF
   grep -Fx "only.mp4" "${played_file}"
 }
 
-@test "roulette startup rescan adds new unseen files to playlist" {
-  local rescan_dir="${TEST_TEMP_DIR}/startup_rescan"
+@test "roulette undo watched status keeps video in playlist" {
+  mkdir -p "${TEST_TEMP_DIR}/undo_watched"
+  local watched_dir="${TEST_TEMP_DIR}/undo_watched"
+  local playlist_file="${watched_dir}/.roulette_playlist"
+  local played_file="${watched_dir}/.roulette_played"
+  touch "${watched_dir}/only.mp4"
+
+  cat >"${TEST_MOCK_DIR}/mpv" <<'EOF'
+#!/bin/bash
+echo "AV: 00:00:02 / 00:39:45 (15%) A-V: -0.000" >&2
+exit 0
+EOF
+  chmod +x "${TEST_MOCK_DIR}/mpv"
+
+  run timeout 2s bash -c "printf 'uq' | ${ROULETTE_BIN} '${watched_dir}'"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Watched removal undone."* ]]
+  grep -Fx "only.mp4" "${playlist_file}"
+  [[ ! -s "${played_file}" ]]
+}
+
+@test "roulette startup does not rescan existing playlist without --scan" {
+  local rescan_dir="${TEST_TEMP_DIR}/startup_no_rescan"
   local playlist_file="${rescan_dir}/.roulette_playlist"
   mkdir -p "${rescan_dir}"
   touch "${rescan_dir}/first.mp4"
@@ -597,17 +662,32 @@ EOF
   [[ "${status}" -eq 0 ]]
   [[ "${output}" =~ "Loaded playlist" ]]
   grep -Fx "first.mp4" "${playlist_file}"
+  run ! grep -Fx "second.mp4" "${playlist_file}"
+}
+
+@test "roulette --scan adds new unseen files to playlist" {
+  local rescan_dir="${TEST_TEMP_DIR}/startup_rescan"
+  local playlist_file="${rescan_dir}/.roulette_playlist"
+  mkdir -p "${rescan_dir}"
+  touch "${rescan_dir}/first.mp4"
+
+  timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${rescan_dir}'" || true
+  touch "${rescan_dir}/second.mp4"
+
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${rescan_dir}' --scan"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" =~ "Loaded playlist" ]]
+  grep -Fx "first.mp4" "${playlist_file}"
   grep -Fx "second.mp4" "${playlist_file}"
 }
 
-@test "roulette startup rescan skips files already in played history" {
+@test "roulette --scan skips files already in played history" {
   local replay_dir="${TEST_TEMP_DIR}/played_skip"
   local playlist_file="${replay_dir}/.roulette_playlist"
   local played_file="${replay_dir}/.roulette_played"
-  local expected_replay_dir=""
   mkdir -p "${replay_dir}"
   touch "${replay_dir}/played.mp4"
-  expected_replay_dir="$(cd "${replay_dir}" && pwd -P)"
 
   cat >"${TEST_MOCK_DIR}/mpv" <<'EOF'
 #!/bin/bash
@@ -626,21 +706,19 @@ exit 0
 EOF
   chmod +x "${TEST_MOCK_DIR}/mpv"
 
-  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${replay_dir}'"
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${replay_dir}' --scan"
 
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" != *"Playing: ${expected_replay_dir}/played.mp4"* ]]
+  [[ "${output}" != *"Playing: "*"/played.mp4"* ]]
   [[ ! -s "${playlist_file}" ]] || ! grep -Fx "played.mp4" "${playlist_file}"
   grep -Fx "fresh.mp4" "${playlist_file}"
   grep -Fx "played.mp4" "${played_file}"
 }
 
-@test "roulette rescans when playlist is empty and finds new files" {
+@test "roulette --scan refills empty playlist when new files exist" {
   local refill_dir="${TEST_TEMP_DIR}/empty_refill"
-  local expected_refill_dir=""
   mkdir -p "${refill_dir}"
   touch "${refill_dir}/only.mp4"
-  expected_refill_dir="$(cd "${refill_dir}" && pwd -P)"
 
   cat >"${TEST_MOCK_DIR}/mpv" <<'EOF'
 #!/bin/bash
@@ -659,10 +737,10 @@ exit 0
 EOF
   chmod +x "${TEST_MOCK_DIR}/mpv"
 
-  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${refill_dir}'"
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${refill_dir}' --scan"
 
   [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *"Playing: ${expected_refill_dir}/new.mp4"* ]]
+  [[ "${output}" == *"Playing: "*"/new.mp4"* ]]
 }
 
 @test "roulette empty playlist with no new files reports all played" {
@@ -731,6 +809,33 @@ EOF
   [[ "${output}" == *"Cleaned 2 stale entries"* ]] || [[ "${output}" == *"State is clean"* ]]
   grep -Fx "keep.mp4" "${playlist_file}"
   [[ ! -s "${played_file}" ]]
+}
+
+@test "played history preserves absolute paths outside relative base" {
+  local downloads_dir="${TEST_TEMP_DIR}/relative_downloads"
+  local main_dir="${TEST_TEMP_DIR}/relative_main"
+  local expected_downloads_dir=""
+  local expected_main_dir=""
+  local played_file="${downloads_dir}/.roulette_played"
+  mkdir -p "${downloads_dir}" "${main_dir}"
+  expected_downloads_dir="$(cd "${downloads_dir}" && pwd -P)"
+  expected_main_dir="$(cd "${main_dir}" && pwd -P)"
+
+  source_roulette_functions
+
+  # shellcheck disable=SC2034
+  PLAYLIST_STORAGE_MODE="relative"
+  PLAYLIST_BASE_DIR="${expected_downloads_dir}"
+  PLAYED_HISTORY=("${expected_main_dir}/clip.mp4")
+
+  save_played_history "${played_file}" "${PLAYLIST_BASE_DIR}"
+
+  grep -Fx "ABS:${expected_main_dir}/clip.mp4" "${played_file}"
+
+  PLAYED_HISTORY=()
+  load_played_history "${played_file}" "${PLAYLIST_BASE_DIR}"
+
+  [[ "${PLAYED_HISTORY[0]}" == "${expected_main_dir}/clip.mp4" ]]
 }
 
 # ======================================================================
@@ -832,6 +937,21 @@ EOF
   [[ "${output}" =~ "Found 2 videos" ]] || [[ "${output}" =~ "2 videos" ]]
 }
 
+@test "ROULETTE_PATH tolerates whitespace around separators" {
+  local dir_a="${TEST_TEMP_DIR}/env_spaced_a"
+  local dir_b="${TEST_TEMP_DIR}/env_spaced_b"
+  local state_dir="${TEST_TEMP_DIR}/state"
+  mkdir -p "${dir_a}" "${dir_b}" "${state_dir}"
+  touch "${dir_a}/video1.mp4"
+  touch "${dir_b}/video2.mov"
+
+  run env XDG_STATE_HOME="${state_dir}" ROULETTE_PATH=" ${dir_a} : ${dir_b} " timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN}"
+
+  [[ "${output}" =~ "Using ROULETTE_PATH directories" ]]
+  [[ "${output}" =~ "Found 2 videos" ]] || [[ "${output}" =~ "2 videos" ]]
+  [[ "${output}" != *"ROULETTE_PATH entry not found"* ]]
+}
+
 @test "detect_media_directory includes all found default directories" {
   local dir_a="${TEST_TEMP_DIR}/auto_detect_a"
   local dir_b="${TEST_TEMP_DIR}/auto_detect_b"
@@ -848,6 +968,7 @@ EOF
 
   source_roulette_functions
 
+  # shellcheck disable=SC2329
   get_default_media_paths() {
     printf "%s\n" "${expected_dir_a}" "${expected_dir_b}"
   }
@@ -873,6 +994,42 @@ EOF
   [[ "${DIRECTORY_PATHS[0]}" == "${expected_dir_a}" ]]
   [[ "${DIRECTORY_PATHS[1]}" == "${expected_dir_b}" ]]
   [[ "${#playlist[@]}" -eq 2 ]]
+}
+
+@test "detect_media_directory trims whitespace in default path definitions" {
+  local dir_a="${TEST_TEMP_DIR}/auto_detect_spaced_a"
+  local dir_b="${TEST_TEMP_DIR}/auto_detect_spaced_b"
+  local expected_dir_a=""
+  local expected_dir_b=""
+  local detect_output_file="${TEST_TEMP_DIR}/detect_spaced_output.txt"
+  local detect_output=""
+  mkdir -p "${dir_a}" "${dir_b}"
+  touch "${dir_a}/video1.mp4"
+  touch "${dir_b}/video2.mkv"
+  expected_dir_a="$(cd "${dir_a}" && pwd -P)"
+  expected_dir_b="$(cd "${dir_b}" && pwd -P)"
+
+  source_roulette_functions
+
+  get_default_media_paths() {
+    printf "%s\n" " ${expected_dir_a} " "  ${expected_dir_b}  "
+  }
+
+  # shellcheck disable=SC2034
+  IS_MACOS=true
+  # shellcheck disable=SC2034
+  IS_WSL=false
+  DIRECTORY_PATH=""
+  DIRECTORY_PATHS=()
+
+  detect_media_directory >"${detect_output_file}"
+  detect_output="$(<"${detect_output_file}")"
+
+  [[ "${#DIRECTORY_PATHS[@]}" -eq 2 ]]
+  [[ "${detect_output}" == *"Found media directories"* ]]
+  [[ "${DIRECTORY_PATH}" == "${expected_dir_a}" ]]
+  [[ "${DIRECTORY_PATHS[0]}" == "${expected_dir_a}" ]]
+  [[ "${DIRECTORY_PATHS[1]}" == "${expected_dir_b}" ]]
 }
 
 @test "progress helpers stay quiet in non-interactive mode" {
@@ -950,6 +1107,21 @@ EOF
   [[ "${output}" =~ "mpv found in PATH" ]] || [[ "${output}" =~ "Playing" ]]
 }
 
+@test "roulette shows mpv failure output before retry prompt" {
+  cat >"${TEST_MOCK_DIR}/mpv" <<'EOF'
+#!/bin/bash
+echo "MOCK_MPV_FAILURE: $*" >&2
+exit 2
+EOF
+  chmod +x "${TEST_MOCK_DIR}/mpv"
+
+  run timeout 3s bash -c "echo 'q' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}'"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"mpv failed while opening video."* ]]
+  [[ "${output}" == *"MOCK_MPV_FAILURE:"* ]]
+}
+
 # ======================================================================
 # INTERACTIVE MENU TESTS (simulated)
 # ======================================================================
@@ -977,6 +1149,13 @@ EOF
   run timeout 3s bash -c "echo -e '\\nq' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}'"
 
   [[ "${output}" =~ "Playing" ]] || [[ "${status}" -eq 124 ]]
+}
+
+@test "roulette exits instead of skipping when stdin closes" {
+  run timeout 3s bash -c "${ROULETTE_BIN} '${TEST_MEDIA_DIR}' </dev/null"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Input closed. Goodbye!"* ]]
 }
 
 # ======================================================================
@@ -1060,6 +1239,41 @@ EOF
   run timeout 3s bash -c "echo -e 'd\\nq' | ${ROULETTE_BIN} '${TEST_MEDIA_DIR}'"
 
   [[ "${output}" =~ "Goodbye" ]] || [[ "${status}" -eq 0 ]] || [[ "${status}" -eq 124 ]]
+}
+
+@test "roulette promote option moves video from downloads to main without re-adding playlist entry" {
+  local downloads_dir="${TEST_TEMP_DIR}/promote_downloads"
+  local main_dir="${TEST_TEMP_DIR}/promote_main"
+  local state_dir="${TEST_TEMP_DIR}/state"
+  local playlist_file=""
+  local played_file=""
+  local expected_downloads_dir=""
+  local expected_main_dir=""
+  mkdir -p "${downloads_dir}/nested" "${main_dir}" "${state_dir}"
+  touch "${downloads_dir}/nested/clip.mp4"
+  expected_downloads_dir="$(cd "${downloads_dir}" && pwd -P)"
+  expected_main_dir="$(cd "${main_dir}" && pwd -P)"
+
+  run env \
+    XDG_STATE_HOME="${state_dir}" \
+    ROULETTE_DOWNLOADS_PATH="${downloads_dir}" \
+    ROULETTE_MAIN_PATH="${main_dir}" \
+    timeout 3s bash -c "printf 'pq' | ${ROULETTE_BIN} '${downloads_dir}' '${main_dir}'"
+
+  [[ "${status}" -eq 0 ]]
+  [[ ! -f "${expected_downloads_dir}/nested/clip.mp4" ]]
+  [[ -f "${expected_main_dir}/nested/clip.mp4" ]]
+  [[ "${output}" == *"Promoted:"* ]]
+  [[ "${output}" == *"Playlist empty - all videos played!"* ]]
+
+  playlist_file="$(find "${state_dir}/roulette" -type f -name 'playlist-*.txt' | head -n 1)"
+  played_file="$(find "${state_dir}/roulette" -type f -name 'played-*.txt' | head -n 1)"
+
+  [[ -n "${playlist_file}" ]]
+  [[ -n "${played_file}" ]]
+  [[ ! -s "${playlist_file}" ]]
+  grep -Fx "${expected_main_dir}/nested/clip.mp4" "${played_file}"
+  run ! grep -Fx "${expected_downloads_dir}/nested/clip.mp4" "${played_file}"
 }
 
 # ======================================================================

@@ -10,7 +10,7 @@ BATS_FORMATTER ?= $(DEFAULT_BATS_FORMATTER)
 BATS_FLAGS ?= --formatter $(BATS_FORMATTER)
 
 # Shell files to check
-SHELL_FILES := roulette $(wildcard scripts/*.sh) $(wildcard tests/*.bats)
+SHELL_FILES := bin/roulette $(wildcard scripts/*.sh) $(wildcard tests/*.bats)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -22,8 +22,8 @@ setup: ## Install development tools, git hooks, and Ruby dependencies
 
 build: $(SHFMT) ## Format the roulette script
 	@echo "Formatting roulette..."
-	@$(SHFMT) -w -i 2 -ci -bn roulette
-	@echo "Build complete: ./roulette"
+	@$(SHFMT) -w -i 2 -ci -bn bin/roulette
+	@echo "Build complete: ./bin/roulette"
 
 test: ## Run BATS test suite
 	@echo "Running tests..."
