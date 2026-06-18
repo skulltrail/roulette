@@ -21,12 +21,18 @@ config = json.loads((root / "release-please-config.json").read_text())
 version_file = (root / "VERSION").read_text().strip()
 roulette_text = (root / "bin" / "roulette").read_text()
 
-match = re.search(r'^VERSION="([^"]+)"\s+# x-release-please-version$', roulette_text, re.MULTILINE)
-if not match:
+version_match = re.search(r'^([^#\s]+)\s+# x-release-please-version$', version_file)
+if not version_match:
+    print("release-check: missing release-please version marker in VERSION", file=sys.stderr)
+    sys.exit(1)
+
+roulette_match = re.search(r'^VERSION="([^"]+)"\s+# x-release-please-version$', roulette_text, re.MULTILINE)
+if not roulette_match:
     print("release-check: missing release-please version marker in bin/roulette", file=sys.stderr)
     sys.exit(1)
 
-roulette_version = match.group(1)
+file_version = version_match.group(1)
+roulette_version = roulette_match.group(1)
 manifest_version = manifest.get(".")
 extra_files = config.get("packages", {}).get(".", {}).get("extra-files", [])
 extra_paths = {entry.get("path") for entry in extra_files}
@@ -38,7 +44,7 @@ if missing_paths:
     sys.exit(1)
 
 versions = {
-    "VERSION": version_file,
+    "VERSION": file_version,
     "bin/roulette": roulette_version,
     ".release-please-manifest.json": manifest_version,
 }
@@ -49,5 +55,5 @@ if len(set(versions.values())) != 1:
       print(f"  {name}: {value}", file=sys.stderr)
     sys.exit(1)
 
-print(f"Release metadata valid: {version_file}")
+print(f"Release metadata valid: {file_version}")
 PY
