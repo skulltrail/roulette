@@ -1276,6 +1276,27 @@ EOF
   run ! grep -Fx "${expected_downloads_dir}/nested/clip.mp4" "${played_file}"
 }
 
+@test "roulette promote option accepts videos elsewhere in a configured source path" {
+  local source_dir="${TEST_TEMP_DIR}/promote_source"
+  local downloads_dir="${source_dir}/video"
+  local main_dir="${TEST_TEMP_DIR}/promote_main"
+  local state_dir="${TEST_TEMP_DIR}/state"
+  mkdir -p "${source_dir}/incoming" "${downloads_dir}" "${main_dir}" "${state_dir}"
+  touch "${source_dir}/incoming/clip.mp4"
+
+  run env \
+    XDG_STATE_HOME="${state_dir}" \
+    ROULETTE_DOWNLOADS_PATH="${downloads_dir}" \
+    ROULETTE_MAIN_PATH="${main_dir}" \
+    timeout 3s bash -c "printf 'pq' | ${ROULETTE_BIN} '${source_dir}' '${main_dir}'"
+
+  [[ "${status}" -eq 0 ]]
+  [[ ! -f "${source_dir}/incoming/clip.mp4" ]]
+  [[ -f "${main_dir}/incoming/clip.mp4" ]]
+  [[ "${output}" == *"Promoted:"* ]]
+  [[ "${output}" != *"Promote only works"* ]]
+}
+
 # ======================================================================
 # ERROR HANDLING TESTS
 # ======================================================================

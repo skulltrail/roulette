@@ -1166,25 +1166,34 @@ remove_video_from_state() {
   fi
 }
 
-video_is_in_promote_downloads_path() {
+promote_source_root_for_video() {
   local video_path="$1"
+  local directory_path=""
 
-  [[ -n "${PROMOTE_DOWNLOADS_PATH}" ]] || return 1
+  if [[ -n "${PROMOTE_DOWNLOADS_PATH}" ]] && video_matches_directory "${video_path}" "${PROMOTE_DOWNLOADS_PATH}"; then
+    printf '%s\n' "${PROMOTE_DOWNLOADS_PATH}"
+    return 0
+  fi
 
-  case "${video_path}" in
-    "${PROMOTE_DOWNLOADS_PATH}"/*) return 0 ;;
-    *) return 1 ;;
-  esac
+  for directory_path in "${DIRECTORY_PATHS[@]}"; do
+    if [[ "${directory_path}" != "${PROMOTE_MAIN_PATH}" ]] && video_matches_directory "${video_path}" "${directory_path}"; then
+      printf '%s\n' "${directory_path}"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 build_promoted_video_path() {
   local video_path="$1"
+  local source_root=""
   local relative_suffix=""
 
-  video_is_in_promote_downloads_path "${video_path}" || return 1
+  source_root=$(promote_source_root_for_video "${video_path}") || return 1
   [[ -n "${PROMOTE_MAIN_PATH}" ]] || return 1
 
-  relative_suffix="${video_path#"${PROMOTE_DOWNLOADS_PATH}/"}"
+  relative_suffix="${video_path#"${source_root}/"}"
   printf '%s\n' "${PROMOTE_MAIN_PATH}/${relative_suffix}"
 }
 
@@ -1192,13 +1201,13 @@ promote_video_to_main() {
   local video_path="$1"
   local destination_path=""
 
-  if [[ -z "${PROMOTE_DOWNLOADS_PATH}" ]] || [[ -z "${PROMOTE_MAIN_PATH}" ]]; then
+  if [[ -z "${PROMOTE_MAIN_PATH}" ]]; then
     echo -e "${YELLOW}Promote paths not configured.${NC}"
     return 1
   fi
 
-  if ! video_is_in_promote_downloads_path "${video_path}"; then
-    echo -e "${YELLOW}Promote only works for files in ${PROMOTE_DOWNLOADS_PATH}.${NC}"
+  if ! promote_source_root_for_video "${video_path}" >/dev/null; then
+    echo -e "${YELLOW}Promote only works for files in a configured source path.${NC}"
     return 1
   fi
 
