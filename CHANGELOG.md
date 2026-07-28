@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/skulltrail/roulette/compare/v1.3.1...v1.4.0) (2026-07-28)
+
+
+### Features
+
+* add --filter option to queue videos based on matching paths ([b97707e](https://github.com/skulltrail/roulette/commit/b97707e589f07a465901e5acf042abafa7909e72))
+
+
+### Bug Fixes
+
+* promote videos from configured source paths ([5522429](https://github.com/skulltrail/roulette/commit/5522429c97d2877bc3329639b15580f1e97b7533))
+
 ## [1.3.1](https://github.com/skulltrail/roulette/compare/v1.3.0...v1.3.1) (2026-06-18)
 
 
