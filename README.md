@@ -31,6 +31,7 @@ I built this out of a need to tackle my ever-growing video collection. With coun
   - `[q]uit` - Exit the script
 - **Directory Priority**: When multiple source directories are configured, earlier directories are exhausted before later ones
 - **Shuffle Mode**: Use `--shuffle` to randomize across all configured directories
+- **Filtered Queues**: Use `--filter QUERY` one or more times to scan only matching video paths and matching directories
 - **Optional Rescan**: Existing playlists stay put unless you run with `--scan` (first run still bootstraps a playlist automatically)
 - **Format Support**: Supports common video extensions: `mp4`, `avi`, `mkv`, `mov`, `wmv`, `flv`, `webm`, `m4v`, `mpg`, `mpeg`
 - **Environment Variables**: Customize mpv behavior with `MPV_GEOMETRY` and `MPV_VOLUME`
@@ -40,6 +41,7 @@ I built this out of a need to tackle my ever-growing video collection. With coun
 
 - **Bash**: Version 3.2 or later
 - **mpv**: The media player used for playback (auto-installed on macOS/Linux if missing)
+- **fd** (Optional): Enables substantially faster parallel library scans; `find` is used when unavailable
 - **mediainfo** (Optional): For viewing file information with the `[i]nfo` command
 
 ## Installation
@@ -63,6 +65,8 @@ I built this out of a need to tackle my ever-growing video collection. With coun
 
 ```bash
 roulette [DIRECTORY ...]
+roulette /Volumes/media/downloads --filter "vacation"
+roulette --filter "2024" --filter "birthday"
 ❯ roulette --debug
     ----------------░░░░░░░-----------------
     ---.--'-'''.---░░]▄▄▄▄▄░░--`'''''-'-''''

@@ -13,6 +13,7 @@ ARG_FULLSCREEN=""
 ARG_IGNORE_MPV_ENV=""
 ARG_SCAN=""
 ARG_SHUFFLE=""
+ARG_FILTERS=()
 ARG_DIRECTORIES=()
 
 # === HELP AND VERSION ===
@@ -52,6 +53,11 @@ Options:
 
   --shuffle
     Shuffle across all source directories instead of honoring directory priority
+
+  --filter QUERY
+    Only queue videos whose file path or containing directory includes QUERY.
+    May be used multiple times; explicit DIRECTORY arguments still override
+    ROULETTE_PATH.
 
 Arguments:
   DIRECTORY
@@ -126,6 +132,14 @@ parse_args() {
         ARG_SHUFFLE=1
         shift
         ;;
+      --filter)
+        if [[ $# -lt 2 ]] || [[ -z "$2" ]]; then
+          printf "missing value for option: %s\n" "$1" >&2
+          exit 1
+        fi
+        ARG_FILTERS+=("$2")
+        shift 2
+        ;;
       -*)
         printf "invalid option: %s\n" "$1" >&2
         exit 1
@@ -164,7 +178,7 @@ debug_log() {
 }
 
 VIDEO_EXTENSIONS=(
-  mp4 avi mkv mov wmv flv webm m4v mpg mpeg mp4
+  mp4 avi mkv mov wmv flv webm m4v mpg mpeg
 )
 
 MPV_PATH="/usr/local/bin/mpv"
@@ -493,15 +507,36 @@ print_unscannable_directory_warning() {
 }
 
 build_multi_directory_playlist_id() {
-  printf '%s\n' "${DIRECTORY_PATHS[@]}" | LC_ALL=C sort | cksum | awk '{print $1}'
+  if ! filters_enabled; then
+    printf '%s\n' "${DIRECTORY_PATHS[@]}" | LC_ALL=C sort | cksum | awk '{print $1}'
+    return 0
+  fi
+
+  {
+    printf 'paths\n'
+    printf '%s\n' "${DIRECTORY_PATHS[@]}" | LC_ALL=C sort
+    printf 'filters\n'
+    printf '%s\n' "${ARG_FILTERS[@]}" | LC_ALL=C sort
+  } | cksum | awk '{print $1}'
+}
+
+filters_enabled() {
+  [[ ${#ARG_FILTERS[@]} -gt 0 ]]
 }
 
 configure_playlist_storage() {
   if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
     PLAYLIST_STORAGE_MODE="relative"
     PLAYLIST_BASE_DIR="${DIRECTORY_PATH}"
-    PLAYLIST_FILE="${DIRECTORY_PATH}/.roulette_playlist"
-    PLAYED_FILE="${DIRECTORY_PATH}/.roulette_played"
+    if filters_enabled; then
+      local filtered_playlist_id=""
+      filtered_playlist_id="$(build_multi_directory_playlist_id)"
+      PLAYLIST_FILE="${DIRECTORY_PATH}/.roulette_playlist-filter-${filtered_playlist_id}"
+      PLAYED_FILE="${DIRECTORY_PATH}/.roulette_played-filter-${filtered_playlist_id}"
+    else
+      PLAYLIST_FILE="${DIRECTORY_PATH}/.roulette_playlist"
+      PLAYED_FILE="${DIRECTORY_PATH}/.roulette_played"
+    fi
     return
   fi
 
@@ -679,10 +714,10 @@ persist_video_state_if_needed() {
 
 try_refill_playlist() {
   local previous_count=${#PLAYLIST[@]}
-  [[ -n "${ARG_SCAN}" ]] || return 1
+  scan_requested || return 1
   [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 1
 
-  resync_state_with_scan "Rescanning library"
+  resync_state_with_scan "$(scan_progress_label)"
   if [[ ${#PLAYLIST[@]} -gt ${previous_count} ]]; then
     save_state_files
     debug_log "Refilled playlist with $((${#PLAYLIST[@]} - previous_count)) new video(s)"
@@ -695,23 +730,84 @@ try_refill_playlist() {
 
 list_videos() {
   [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 1
-  local find_args=(find)
   local directory_path=""
+  local file_path=""
   for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
-    find_args+=("${directory_path}")
+    while IFS= read -r -d '' file_path; do
+      printf '%s\0' "${file_path}"
+    done < <(find_matching_videos "${directory_path}")
   done
-  find_args+=(-type f '(')
-  local i
-  for ((i = 0; i < ${#VIDEO_EXTENSIONS[@]}; i++)); do
-    local ext="${VIDEO_EXTENSIONS[${i}]}"
-    find_args+=(-iname "*.${ext}")
-    if ((i < ${#VIDEO_EXTENSIONS[@]} - 1)); then
-      find_args+=(-o)
+}
+
+print_filter_selection() {
+  filters_enabled || return 0
+
+  if [[ ${#ARG_FILTERS[@]} -eq 1 ]]; then
+    echo "Filtering scan by: ${ARG_FILTERS[0]}"
+    return 0
+  fi
+
+  echo "Filtering scan by:"
+  local filter=""
+  for filter in "${ARG_FILTERS[@]}"; do
+    echo "  - ${filter}"
+  done
+}
+
+scan_requested() {
+  [[ -n "${ARG_SCAN}" ]]
+}
+
+no_videos_found_message() {
+  if filters_enabled; then
+    echo "No video files matched filter."
+  else
+    echo "No video files found."
+  fi
+}
+
+scan_label_for_sources() {
+  if filters_enabled; then
+    if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
+      echo "Scanning filtered directory: ${DIRECTORY_PATH}"
+    else
+      echo "Scanning ${#DIRECTORY_PATHS[@]} directories with filters..."
     fi
-  done
-  find_args+=(')')
-  find_args+=(-print0)
-  "${find_args[@]}"
+    return 0
+  fi
+
+  if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
+    echo "Scanning directory: ${DIRECTORY_PATH}"
+  else
+    echo "Scanning ${#DIRECTORY_PATHS[@]} directories..."
+  fi
+}
+
+scan_progress_label() {
+  if filters_enabled; then
+    printf '%s\n' "Scanning filters"
+  else
+    printf '%s\n' "Scanning library"
+  fi
+}
+
+format_found_videos_message() {
+  local count="$1"
+  if filters_enabled; then
+    echo "Found ${count} filtered videos, saved playlist."
+  else
+    echo "Found ${count} videos, saved playlist."
+  fi
+}
+
+filter_storage_notice() {
+  filters_enabled || return 0
+  echo "Using filtered playlist: ${PLAYLIST_FILE}"
+}
+
+describe_filter_debug() {
+  filters_enabled || return 0
+  debug_log "Filters: ${ARG_FILTERS[*]}"
 }
 
 progress_output_enabled() {
@@ -770,11 +866,103 @@ is_supported_video_path() {
   return 1
 }
 
-count_scannable_files() {
-  local total_files=0
+stream_video_candidates_with_find() {
+  local directory_path="$1"
+  local find_args=(find "${directory_path}" -type f '(')
+  local i=0
+  local ext=""
+
+  for ((i = 0; i < ${#VIDEO_EXTENSIONS[@]}; i++)); do
+    ext="${VIDEO_EXTENSIONS[${i}]}"
+    find_args+=(-iname "*.${ext}")
+    if ((i < ${#VIDEO_EXTENSIONS[@]} - 1)); then
+      find_args+=(-o)
+    fi
+  done
+  find_args+=(')')
+  find_args+=(-print0)
+  "${find_args[@]}"
+}
+
+stream_video_candidates_with_fd() {
+  local scanner_path="$1"
+  local directory_path="$2"
+  local scanner_args=(
+    "${scanner_path}"
+    --type f
+    --hidden
+    --no-ignore
+    --print0
+  )
+  local extension=""
+
+  for extension in "${VIDEO_EXTENSIONS[@]}"; do
+    scanner_args+=(--extension "${extension}")
+  done
+
+  scanner_args+=(. "${directory_path}")
+  "${scanner_args[@]}"
+}
+
+find_matching_videos() {
+  local directory_path="$1"
+  local scanner_path=""
+  local file_path=""
+  local relative_path=""
+  local filter=""
+  local filter_matched=false
+  local restore_nocasematch=false
+
+  if [[ -z "${ROULETTE_DISABLE_FD:-}" ]]; then
+    scanner_path="$(command -v fd 2>/dev/null || command -v fdfind 2>/dev/null || true)"
+  fi
+
+  if filters_enabled && ! shopt -q nocasematch; then
+    shopt -s nocasematch
+    restore_nocasematch=true
+  fi
+
+  if [[ -n "${scanner_path}" ]]; then
+    while IFS= read -r -d '' file_path; do
+      relative_path="${file_path#"${directory_path}/"}"
+      if filters_enabled; then
+        filter_matched=false
+        for filter in "${ARG_FILTERS[@]}"; do
+          if [[ "${relative_path}" == *"${filter}"* ]]; then
+            filter_matched=true
+            break
+          fi
+        done
+        [[ "${filter_matched}" == true ]] || continue
+      fi
+      printf '%s\0' "${file_path}"
+    done < <(stream_video_candidates_with_fd "${scanner_path}" "${directory_path}")
+  else
+    while IFS= read -r -d '' file_path; do
+      relative_path="${file_path#"${directory_path}/"}"
+      if filters_enabled; then
+        filter_matched=false
+        for filter in "${ARG_FILTERS[@]}"; do
+          if [[ "${relative_path}" == *"${filter}"* ]]; then
+            filter_matched=true
+            break
+          fi
+        done
+        [[ "${filter_matched}" == true ]] || continue
+      fi
+      printf '%s\0' "${file_path}"
+    done < <(stream_video_candidates_with_find "${directory_path}")
+  fi
+
+  if [[ "${restore_nocasematch}" == true ]]; then
+    shopt -u nocasematch
+  fi
+}
+
+count_matching_videos() {
+  local total_videos=0
   local indexed_dirs=0
   local directory_path=""
-  local directory_file_count=0
   local file_path=""
 
   [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || {
@@ -783,27 +971,23 @@ count_scannable_files() {
   }
 
   for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
-    directory_file_count=0
     while IFS= read -r -d '' file_path; do
-      directory_file_count=$((directory_file_count + 1))
-    done < <(find "${directory_path}" -type f -print0)
+      total_videos=$((total_videos + 1))
+    done < <(find_matching_videos "${directory_path}")
 
-    total_files=$((total_files + directory_file_count))
     indexed_dirs=$((indexed_dirs + 1))
-    draw_progress_bar "Indexing scan" "${indexed_dirs}" "${#SCANNABLE_DIRECTORY_PATHS[@]}" " | ${total_files} files"
+    draw_progress_bar "Indexing scan" "${indexed_dirs}" "${#SCANNABLE_DIRECTORY_PATHS[@]}" " | ${total_videos} videos"
   done
 
   if [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]]; then
     finish_progress_bar
   fi
 
-  printf '%s\n' "${total_files}"
+  printf '%s\n' "${total_videos}"
 }
 
 scan_videos_with_progress() {
   local scan_label="${1:-Scanning library}"
-  local total_files=0
-  local processed_files=0
   local matched_videos=0
   local directory_path=""
   local file_path=""
@@ -811,21 +995,21 @@ scan_videos_with_progress() {
   SCANNED_VIDEOS=()
   [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 0
 
-  total_files=$(count_scannable_files)
+  if progress_output_enabled; then
+    printf '\r\033[2K%s | 0 videos found' "${scan_label}" >&2
+  fi
 
   for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
     while IFS= read -r -d '' file_path; do
-      processed_files=$((processed_files + 1))
-      if is_supported_video_path "${file_path}"; then
-        SCANNED_VIDEOS+=("${file_path}")
-        matched_videos=$((matched_videos + 1))
+      SCANNED_VIDEOS+=("${file_path}")
+      matched_videos=$((matched_videos + 1))
+      if progress_output_enabled; then
+        printf '\r\033[2K%s | %s videos found' "${scan_label}" "${matched_videos}" >&2
       fi
-      draw_progress_bar "${scan_label}" "${processed_files}" "${total_files}" " | ${matched_videos} videos"
-    done < <(find "${directory_path}" -type f -print0)
+    done < <(find_matching_videos "${directory_path}")
   done
 
-  if [[ ${total_files} -gt 0 ]]; then
-    draw_progress_bar "${scan_label}" "${total_files}" "${total_files}" " | ${matched_videos} videos"
+  if progress_output_enabled; then
     finish_progress_bar
   fi
 }
@@ -1105,26 +1289,181 @@ refresh_scanned_videos() {
   scan_videos_with_progress "${scan_label}"
 }
 
+write_path_array_file() {
+  local array_name="$1"
+  local output_file="$2"
+  local paths=()
+  local path=""
+
+  eval "paths=(\"\${${array_name}[@]}\")"
+  {
+    for path in "${paths[@]}"; do
+      [[ -n "${path}" ]] && printf '%s\n' "${path}"
+    done
+  } >"${output_file}"
+}
+
+load_path_array_file() {
+  local array_name="$1"
+  local input_file="$2"
+  local path=""
+
+  eval "${array_name}=()"
+  while IFS= read -r path; do
+    [[ -n "${path}" ]] || continue
+    eval "${array_name}+=(\"\${path}\")"
+  done <"${input_file}"
+}
+
+reconcile_tracked_path_file() {
+  local input_file="$1"
+  local output_file="$2"
+  local scanned_file="$3"
+  local scannable_directories_file="$4"
+  local unscannable_directories_file="$5"
+  local stale_count_file="$6"
+
+  LC_ALL=C awk \
+    -v scanned_file="${scanned_file}" \
+    -v scannable_file="${scannable_directories_file}" \
+    -v unscannable_file="${unscannable_directories_file}" \
+    -v stale_count_file="${stale_count_file}" '
+      function path_is_within(path, directories, directory_count,    i, prefix) {
+        for (i = 1; i <= directory_count; i++) {
+          prefix = directories[i] "/"
+          if (index(path, prefix) == 1) {
+            return 1
+          }
+        }
+        return 0
+      }
+
+      BEGIN {
+        while ((getline line < scanned_file) > 0) {
+          scanned[line] = 1
+        }
+        close(scanned_file)
+
+        while ((getline line < scannable_file) > 0) {
+          scannable[++scannable_count] = line
+        }
+        close(scannable_file)
+
+        while ((getline line < unscannable_file) > 0) {
+          unscannable[++unscannable_count] = line
+        }
+        close(unscannable_file)
+      }
+
+      length($0) > 0 && !retained[$0]++ {
+        if (path_is_within($0, unscannable, unscannable_count) ||
+            !path_is_within($0, scannable, scannable_count) ||
+            ($0 in scanned)) {
+          print
+        } else {
+          stale_count++
+        }
+      }
+
+      END {
+        print stale_count + 0 > stale_count_file
+      }
+    ' "${input_file}" >"${output_file}"
+}
+
+reconcile_state_from_scan() {
+  local sync_dir=""
+  local scanned_file=""
+  local playlist_input_file=""
+  local playlist_output_file=""
+  local played_input_file=""
+  local played_output_file=""
+  local scannable_file=""
+  local unscannable_file=""
+  local playlist_stale_file=""
+  local played_stale_file=""
+  local new_count_file=""
+
+  sync_dir="$(mktemp -d "${TMPDIR:-/tmp}/roulette-sync.XXXXXX")" || return 1
+  scanned_file="${sync_dir}/scanned"
+  playlist_input_file="${sync_dir}/playlist-input"
+  playlist_output_file="${sync_dir}/playlist-output"
+  played_input_file="${sync_dir}/played-input"
+  played_output_file="${sync_dir}/played-output"
+  scannable_file="${sync_dir}/scannable"
+  unscannable_file="${sync_dir}/unscannable"
+  playlist_stale_file="${sync_dir}/playlist-stale-count"
+  played_stale_file="${sync_dir}/played-stale-count"
+  new_count_file="${sync_dir}/new-count"
+
+  write_path_array_file "SCANNED_VIDEOS" "${scanned_file}"
+  write_path_array_file "PLAYLIST" "${playlist_input_file}"
+  write_path_array_file "PLAYED_HISTORY" "${played_input_file}"
+  write_path_array_file "SCANNABLE_DIRECTORY_PATHS" "${scannable_file}"
+  write_path_array_file "UNSCANNABLE_DIRECTORY_PATHS" "${unscannable_file}"
+
+  reconcile_tracked_path_file \
+    "${playlist_input_file}" \
+    "${playlist_output_file}" \
+    "${scanned_file}" \
+    "${scannable_file}" \
+    "${unscannable_file}" \
+    "${playlist_stale_file}"
+  reconcile_tracked_path_file \
+    "${played_input_file}" \
+    "${played_output_file}" \
+    "${scanned_file}" \
+    "${scannable_file}" \
+    "${unscannable_file}" \
+    "${played_stale_file}"
+
+  LC_ALL=C awk \
+    -v playlist_file="${playlist_output_file}" \
+    -v played_file="${played_output_file}" \
+    -v new_count_file="${new_count_file}" '
+      BEGIN {
+        while ((getline line < playlist_file) > 0) {
+          playlist[line] = 1
+        }
+        close(playlist_file)
+
+        while ((getline line < played_file) > 0) {
+          played[line] = 1
+        }
+        close(played_file)
+      }
+
+      length($0) > 0 && !($0 in playlist) && !($0 in played) {
+        print
+        playlist[$0] = 1
+        new_count++
+      }
+
+      END {
+        print new_count + 0 > new_count_file
+      }
+    ' "${scanned_file}" >>"${playlist_output_file}"
+
+  load_path_array_file "PLAYLIST" "${playlist_output_file}"
+  load_path_array_file "PLAYED_HISTORY" "${played_output_file}"
+  RECONCILED_PLAYLIST_STALE_COUNT="$(<"${playlist_stale_file}")"
+  RECONCILED_PLAYED_STALE_COUNT="$(<"${played_stale_file}")"
+  RECONCILED_NEW_COUNT="$(<"${new_count_file}")"
+
+  rm -rf "${sync_dir}"
+}
+
 resync_state_with_scan() {
   local scan_label="${1:-Scanning library}"
   local playlist_stale_count=0
   local played_stale_count=0
   local new_count=0
-  local file=""
-
-  compact_tracked_paths "PLAYLIST"
-  playlist_stale_count="${LAST_COMPACT_REMOVED_COUNT}"
-  compact_tracked_paths "PLAYED_HISTORY"
-  played_stale_count="${LAST_COMPACT_REMOVED_COUNT}"
 
   refresh_scanned_videos "${scan_label}"
-
-  for file in "${SCANNED_VIDEOS[@]}"; do
-    if ! path_in_array "PLAYLIST" "${file}" && ! path_in_array "PLAYED_HISTORY" "${file}"; then
-      PLAYLIST+=("${file}")
-      new_count=$((new_count + 1))
-    fi
-  done
+  reconcile_state_from_scan
+  playlist_stale_count="${RECONCILED_PLAYLIST_STALE_COUNT}"
+  played_stale_count="${RECONCILED_PLAYED_STALE_COUNT}"
+  new_count="${RECONCILED_NEW_COUNT}"
 
   if [[ ${playlist_stale_count} -gt 0 ]] || [[ ${played_stale_count} -gt 0 ]] || [[ ${new_count} -gt 0 ]]; then
     mark_state_dirty
@@ -1408,12 +1747,16 @@ else
   detect_media_directory
 fi
 
+print_filter_selection
+
 check_and_install_mpv
 
 classify_directory_scan_access
 
 configure_playlist_storage
+filter_storage_notice
 configure_promote_paths
+describe_filter_debug
 
 # Load or create playlist
 playlist_loaded=false
@@ -1445,13 +1788,9 @@ if [[ -n "${ARG_RESET}" ]]; then
   PLAYLIST=()
   PLAYED_HISTORY=()
   mark_state_dirty
-  if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
-    echo "Scanning directory: ${DIRECTORY_PATH}"
-  else
-    echo "Scanning ${#DIRECTORY_PATHS[@]} directories..."
-  fi
+  scan_label_for_sources
 
-  refresh_scanned_videos
+  refresh_scanned_videos "$(scan_progress_label)"
   PLAYLIST=("${SCANNED_VIDEOS[@]}")
   if [[ ${#PLAYLIST[@]} -gt 0 ]]; then
     mark_state_dirty
@@ -1459,12 +1798,12 @@ if [[ -n "${ARG_RESET}" ]]; then
 
   if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
     save_state_files
-    echo "No video files found."
+    no_videos_found_message
     exit 0
   fi
 
   save_state_files
-  echo "Found ${#PLAYLIST[@]} videos, saved playlist."
+  format_found_videos_message "${#PLAYLIST[@]}"
   print_playlist_directory_counts
 else
   if [[ ${#UNSCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]]; then
@@ -1494,13 +1833,13 @@ else
       exit 1
     fi
   else
-    if [[ "${playlist_loaded}" == true ]] && [[ -z "${ARG_SCAN}" ]]; then
+    if [[ "${playlist_loaded}" == true ]] && ! scan_requested; then
       selectable_playlist_count=$(count_selectable_playlist_videos)
       save_state_files
       echo "Loaded playlist: ${selectable_playlist_count} selectable videos remaining (${#PLAYLIST[@]} tracked)"
       print_playlist_directory_counts
     elif [[ "${playlist_loaded}" == true ]] || [[ "${played_history_loaded}" == true ]]; then
-      resync_state_with_scan
+      resync_state_with_scan "$(scan_progress_label)"
       save_state_files
 
       if [[ "${playlist_loaded}" == true ]]; then
@@ -1511,24 +1850,20 @@ else
       fi
       print_playlist_directory_counts
     else
-      if [[ ${#DIRECTORY_PATHS[@]} -eq 1 ]]; then
-        echo "Scanning directory: ${DIRECTORY_PATH}"
-      else
-        echo "Scanning ${#DIRECTORY_PATHS[@]} directories..."
-      fi
+      scan_label_for_sources
 
-      resync_state_with_scan
+      resync_state_with_scan "$(scan_progress_label)"
       if [[ ${#PLAYLIST[@]} -gt 0 ]]; then
         mark_state_dirty
       fi
 
       if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
-        echo "No video files found."
+        no_videos_found_message
         exit 0
       fi
 
       save_state_files
-      echo "Found ${#PLAYLIST[@]} videos, saved playlist."
+      format_found_videos_message "${#PLAYLIST[@]}"
       print_playlist_directory_counts
     fi
   fi

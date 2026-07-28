@@ -67,6 +67,11 @@ setup() {
   export TEST_MEDIA_DIR="${TEST_TEMP_DIR}/media"
   export TEST_MOCK_DIR="${TEST_TEMP_DIR}/mock_bin"
 
+  # Keep developer shell defaults from changing test behavior.
+  unset ROULETTE_PATH
+  unset ROULETTE_DOWNLOADS_PATH
+  unset ROULETTE_MAIN_PATH
+
   mkdir -p "${TEST_MEDIA_DIR}" "${TEST_MOCK_DIR}"
 
   if ! type -P timeout >/dev/null 2>&1; then
@@ -235,6 +240,18 @@ create_test_videos() {
   [[ "${output}" =~ "--scan" ]]
 }
 
+@test "roulette help shows filter flag" {
+  run "${ROULETTE_BIN}" --help
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" =~ "--filter" ]]
+}
+
+@test "roulette --filter requires a query" {
+  run "${ROULETTE_BIN}" --filter
+  [[ "${status}" -ne 0 ]]
+  [[ "${output}" =~ "missing value for option: --filter" ]]
+}
+
 # ======================================================================
 # DIRECTORY VALIDATION TESTS
 # ======================================================================
@@ -400,6 +417,124 @@ create_test_videos() {
 
   run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${TEST_TEMP_DIR}/nested'"
   [[ "${output}" =~ "Found 1 video" ]] || [[ "${output}" =~ "1 video" ]]
+}
+
+@test "roulette --filter includes matching video files and all videos inside matching directories" {
+  local filter_dir="${TEST_TEMP_DIR}/filter_root"
+  local playlist_file=""
+  mkdir -p "${filter_dir}/needle_collection/deeper" "${filter_dir}/other"
+  touch "${filter_dir}/needle_collection/plain_name.mp4"
+  touch "${filter_dir}/needle_collection/deeper/another.avi"
+  touch "${filter_dir}/other/needle_clip.mkv"
+  touch "${filter_dir}/other/plain.mp4"
+  touch "${filter_dir}/other/needle_notes.txt"
+
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter needle"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Filtering scan by: needle"* ]]
+  [[ "${output}" == *"Found 3 filtered videos"* ]]
+
+  playlist_file="$(find "${filter_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)"
+  [[ -n "${playlist_file}" ]]
+  grep -Fx "needle_collection/plain_name.mp4" "${playlist_file}"
+  grep -Fx "needle_collection/deeper/another.avi" "${playlist_file}"
+  grep -Fx "other/needle_clip.mkv" "${playlist_file}"
+  run ! grep -Fx "other/plain.mp4" "${playlist_file}"
+  run ! grep -Fx "other/needle_notes.txt" "${playlist_file}"
+}
+
+@test "roulette --filter may be provided multiple times" {
+  local filter_dir="${TEST_TEMP_DIR}/multi_filter_root"
+  local playlist_file=""
+  mkdir -p "${filter_dir}/first" "${filter_dir}/second" "${filter_dir}/third"
+  touch "${filter_dir}/first/alpha_clip.mp4"
+  touch "${filter_dir}/second/beta_clip.mp4"
+  touch "${filter_dir}/third/gamma_clip.mp4"
+
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter alpha --filter beta"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Filtering scan by:"* ]]
+  [[ "${output}" == *"Found 2 filtered videos"* ]]
+
+  playlist_file="$(find "${filter_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)"
+  [[ -n "${playlist_file}" ]]
+  grep -Fx "first/alpha_clip.mp4" "${playlist_file}"
+  grep -Fx "second/beta_clip.mp4" "${playlist_file}"
+  run ! grep -Fx "third/gamma_clip.mp4" "${playlist_file}"
+}
+
+@test "roulette --filter matches paths relative to the scan root" {
+  local filter_dir="${TEST_TEMP_DIR}/needle_root"
+  mkdir -p "${filter_dir}"
+  touch "${filter_dir}/plain.mp4"
+
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter needle_root"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"No video files matched filter."* ]]
+}
+
+@test "roulette --filter with explicit directories ignores ROULETTE_PATH" {
+  local explicit_dir="${TEST_TEMP_DIR}/filter_explicit"
+  local env_dir="${TEST_TEMP_DIR}/filter_env"
+  local explicit_playlist=""
+  mkdir -p "${explicit_dir}/target" "${env_dir}/target"
+  touch "${explicit_dir}/target/needle_explicit.mp4"
+  touch "${env_dir}/target/needle_env.mp4"
+
+  run env ROULETTE_PATH="${env_dir}" timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${explicit_dir}' --filter needle"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" == *"Using provided: "* ]]
+  [[ "${output}" != *"Using ROULETTE_PATH"* ]]
+
+  explicit_playlist="$(find "${explicit_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)"
+  [[ -n "${explicit_playlist}" ]]
+  grep -Fx "target/needle_explicit.mp4" "${explicit_playlist}"
+  [[ -z "$(find "${env_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)" ]]
+}
+
+@test "roulette --filter loads existing filtered playlist without rescanning" {
+  local filter_dir="${TEST_TEMP_DIR}/filter_no_rescan"
+  local playlist_file=""
+  mkdir -p "${filter_dir}"
+  touch "${filter_dir}/needle_first.mp4"
+
+  timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter needle" || true
+  touch "${filter_dir}/needle_second.mp4"
+
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter needle"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" =~ "Loaded playlist" ]]
+  [[ "${output}" != *"Scanning filtered directory"* ]]
+
+  playlist_file="$(find "${filter_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)"
+  [[ -n "${playlist_file}" ]]
+  grep -Fx "needle_first.mp4" "${playlist_file}"
+  run ! grep -Fx "needle_second.mp4" "${playlist_file}"
+}
+
+@test "roulette --filter with --scan refreshes existing filtered playlist" {
+  local filter_dir="${TEST_TEMP_DIR}/filter_scan_refresh"
+  local playlist_file=""
+  mkdir -p "${filter_dir}"
+  touch "${filter_dir}/needle_first.mp4"
+
+  timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter needle" || true
+  touch "${filter_dir}/needle_second.mp4"
+
+  run timeout 2s bash -c "echo 'q' | ${ROULETTE_BIN} '${filter_dir}' --filter needle --scan"
+
+  [[ "${status}" -eq 0 ]]
+  [[ "${output}" =~ "Loaded playlist" ]]
+
+  playlist_file="$(find "${filter_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)"
+  [[ -n "${playlist_file}" ]]
+  grep -Fx "needle_first.mp4" "${playlist_file}"
+  grep -Fx "needle_second.mp4" "${playlist_file}"
 }
 
 # ======================================================================
@@ -1038,11 +1173,11 @@ EOF
   run ! progress_output_enabled
 }
 
-@test "scan progress helpers count files and collect only supported videos" {
+@test "scan progress helpers count matching videos" {
   local scan_dir="${TEST_TEMP_DIR}/progress_scan"
   local expected_scan_dir=""
   local stderr_file="${TEST_TEMP_DIR}/progress_stderr.txt"
-  local total_files=""
+  local total_videos=""
   mkdir -p "${scan_dir}/nested"
   touch "${scan_dir}/clip.mp4"
   touch "${scan_dir}/movie.MOV"
@@ -1056,8 +1191,8 @@ EOF
   # shellcheck disable=SC2034
   SCANNABLE_DIRECTORY_PATHS=("${expected_scan_dir}")
 
-  total_files="$(count_scannable_files 2>"${stderr_file}")"
-  [[ "${total_files}" -eq 4 ]]
+  total_videos="$(count_matching_videos 2>"${stderr_file}")"
+  [[ "${total_videos}" -eq 3 ]]
   [[ ! -s "${stderr_file}" ]]
 
   scan_videos_with_progress "Test scan" 2>"${stderr_file}"
@@ -1068,6 +1203,60 @@ EOF
   [[ "${SCANNED_VIDEOS[*]}" == *"${expected_scan_dir}/nested/deep.webm"* ]]
   [[ "${SCANNED_VIDEOS[*]}" != *"${expected_scan_dir}/notes.txt"* ]]
   [[ ! -s "${stderr_file}" ]]
+}
+
+@test "video collection traverses each source only once" {
+  local scan_dir="${TEST_TEMP_DIR}/single_pass_scan"
+  local scan_calls_file="${TEST_TEMP_DIR}/single_pass_calls"
+  mkdir -p "${scan_dir}"
+  touch "${scan_dir}/first.mp4" "${scan_dir}/second.mkv"
+
+  source_roulette_functions
+
+  SCANNABLE_DIRECTORY_PATHS=("${scan_dir}")
+  find_matching_videos() {
+    local directory_path="$1"
+    printf 'scan\n' >>"${scan_calls_file}"
+    printf '%s\0' "${directory_path}/first.mp4" "${directory_path}/second.mkv"
+  }
+
+  scan_videos_with_progress "Single pass"
+
+  [[ "${#SCANNED_VIDEOS[@]}" -eq 2 ]]
+  [[ "$(wc -l <"${scan_calls_file}" | tr -d ' ')" -eq 1 ]]
+}
+
+@test "scan reconciliation removes stale paths and preserves inaccessible paths" {
+  local scan_dir="${TEST_TEMP_DIR}/linear_sync_scan"
+  local offline_dir="${TEST_TEMP_DIR}/linear_sync_offline"
+  mkdir -p "${scan_dir}" "${offline_dir}"
+
+  source_roulette_functions
+
+  # shellcheck disable=SC2034
+  SCANNABLE_DIRECTORY_PATHS=("${scan_dir}")
+  # shellcheck disable=SC2034
+  UNSCANNABLE_DIRECTORY_PATHS=("${offline_dir}")
+  SCANNED_VIDEOS=("${scan_dir}/keep.mp4" "${scan_dir}/new.mp4")
+  PLAYLIST=(
+    "${scan_dir}/keep.mp4"
+    "${scan_dir}/keep.mp4"
+    "${scan_dir}/stale.mp4"
+    "${offline_dir}/preserve.mp4"
+  )
+  PLAYED_HISTORY=("${scan_dir}/played-stale.mp4")
+
+  reconcile_state_from_scan
+
+  [[ "${#PLAYLIST[@]}" -eq 3 ]]
+  [[ "${PLAYLIST[*]}" == *"${scan_dir}/keep.mp4"* ]]
+  [[ "${PLAYLIST[*]}" == *"${scan_dir}/new.mp4"* ]]
+  [[ "${PLAYLIST[*]}" == *"${offline_dir}/preserve.mp4"* ]]
+  [[ "${PLAYLIST[*]}" != *"${scan_dir}/stale.mp4"* ]]
+  [[ "${#PLAYED_HISTORY[@]}" -eq 0 ]]
+  [[ "${RECONCILED_PLAYLIST_STALE_COUNT}" -eq 1 ]]
+  [[ "${RECONCILED_PLAYED_STALE_COUNT}" -eq 1 ]]
+  [[ "${RECONCILED_NEW_COUNT}" -eq 1 ]]
 }
 
 @test "supported video matcher is case-insensitive" {
