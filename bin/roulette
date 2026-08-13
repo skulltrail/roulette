@@ -814,6 +814,45 @@ progress_output_enabled() {
   [[ -t 1 ]] && [[ "${TERM:-}" != "dumb" ]]
 }
 
+SCAN_SPINNER_PID=""
+
+start_scan_spinner() {
+  local label="$1"
+  local source_index="$2"
+  local source_total="$3"
+  local directory_path="$4"
+  local count_file="$5"
+  local parent_pid="${BASHPID}"
+
+  progress_output_enabled || return 0
+
+  (
+    local frames=('|' '/' '-' "\\")
+    local frame_index=0
+    local matched_videos=0
+
+    while kill -0 "${parent_pid}" >/dev/null 2>&1; do
+      if [[ -r "${count_file}" ]]; then
+        read -r matched_videos <"${count_file}" || matched_videos=0
+      fi
+      printf '\r\033[2K%s %s | %s videos found | source %s/%s: %s' \
+        "${label}" "${frames[${frame_index}]}" "${matched_videos}" \
+        "${source_index}" "${source_total}" "${directory_path}" >&2
+      frame_index=$(((frame_index + 1) % ${#frames[@]}))
+      sleep 0.12
+    done
+  ) &
+  SCAN_SPINNER_PID=$!
+}
+
+stop_scan_spinner() {
+  [[ -n "${SCAN_SPINNER_PID}" ]] || return 0
+
+  kill "${SCAN_SPINNER_PID}" >/dev/null 2>&1 || true
+  wait "${SCAN_SPINNER_PID}" 2>/dev/null || true
+  SCAN_SPINNER_PID=""
+}
+
 draw_progress_bar() {
   local label="$1"
   local processed="$2"
@@ -866,9 +905,17 @@ is_supported_video_path() {
   return 1
 }
 
+video_path_is_in_incomplete_directory() {
+  local video_path="$1"
+  case "${video_path}" in
+    */.incomplete/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 stream_video_candidates_with_find() {
   local directory_path="$1"
-  local find_args=(find "${directory_path}" -type f '(')
+  local find_args=(find "${directory_path}" -type d -name .incomplete -prune -o -type f '(')
   local i=0
   local ext=""
 
@@ -892,6 +939,7 @@ stream_video_candidates_with_fd() {
     --type f
     --hidden
     --no-ignore
+    --exclude .incomplete
     --print0
   )
   local extension=""
@@ -924,6 +972,7 @@ find_matching_videos() {
 
   if [[ -n "${scanner_path}" ]]; then
     while IFS= read -r -d '' file_path; do
+      video_path_is_in_incomplete_directory "${file_path}" && continue
       relative_path="${file_path#"${directory_path}/"}"
       if filters_enabled; then
         filter_matched=false
@@ -939,6 +988,7 @@ find_matching_videos() {
     done < <(stream_video_candidates_with_fd "${scanner_path}" "${directory_path}")
   else
     while IFS= read -r -d '' file_path; do
+      video_path_is_in_incomplete_directory "${file_path}" && continue
       relative_path="${file_path#"${directory_path}/"}"
       if filters_enabled; then
         filter_matched=false
@@ -991,27 +1041,34 @@ scan_videos_with_progress() {
   local matched_videos=0
   local directory_path=""
   local file_path=""
+  local source_index=0
+  local source_total="${#SCANNABLE_DIRECTORY_PATHS[@]}"
+  local progress_dir=""
+  local count_file=""
 
   SCANNED_VIDEOS=()
   [[ ${#SCANNABLE_DIRECTORY_PATHS[@]} -gt 0 ]] || return 0
 
-  if progress_output_enabled; then
-    printf '\r\033[2K%s | 0 videos found' "${scan_label}" >&2
-  fi
+  progress_dir="$(mktemp -d "${TMPDIR:-/tmp}/roulette-progress.XXXXXX")" || return 1
+  count_file="${progress_dir}/matched-videos"
+  printf '0\n' >"${count_file}"
 
   for directory_path in "${SCANNABLE_DIRECTORY_PATHS[@]}"; do
+    source_index=$((source_index + 1))
+    start_scan_spinner "${scan_label}" "${source_index}" "${source_total}" "${directory_path}" "${count_file}"
     while IFS= read -r -d '' file_path; do
       SCANNED_VIDEOS+=("${file_path}")
       matched_videos=$((matched_videos + 1))
-      if progress_output_enabled; then
-        printf '\r\033[2K%s | %s videos found' "${scan_label}" "${matched_videos}" >&2
-      fi
+      printf '%s\n' "${matched_videos}" >"${count_file}"
     done < <(find_matching_videos "${directory_path}")
+    stop_scan_spinner
   done
 
   if progress_output_enabled; then
-    finish_progress_bar
+    printf '\r\033[2K%s complete | %s videos found\n' "${scan_label}" "${matched_videos}" >&2
   fi
+
+  rm -rf "${progress_dir}"
 }
 
 # Playlist management functions
@@ -1240,7 +1297,7 @@ path_is_in_unscannable_directory() {
 
 playlist_entry_is_selectable() {
   local video_path="$1"
-  ! path_is_in_unscannable_directory "${video_path}"
+  ! path_is_in_unscannable_directory "${video_path}" && ! video_path_is_in_incomplete_directory "${video_path}"
 }
 
 count_selectable_playlist_videos() {
@@ -1575,6 +1632,14 @@ promote_video_to_main() {
     return 1
   fi
 
+  if video_directory_only_has_sidecars "${video_path}"; then
+    if remove_video_sidecars "${video_path}"; then
+      prompt_to_remove_empty_video_directory "${video_path}"
+    else
+      echo -e "${YELLOW}Could not remove all accompanying .nfo/.txt files; directory kept.${NC}"
+    fi
+  fi
+
   remove_from_playlist "${video_path}"
   remove_from_played_history "${video_path}"
   remove_from_playlist "${destination_path}"
@@ -1616,6 +1681,102 @@ video_matches_directory() {
   case "${video_path}" in
     "${directory_path}"/*) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+video_directory_is_safe_to_remove() {
+  local video_path="$1"
+  local video_directory=""
+  local source_directory=""
+  local existing_entry=""
+
+  video_directory="$(dirname "${video_path}")"
+  [[ -d "${video_directory}" ]] || return 1
+
+  # Never offer to remove a configured source root. Only the video's direct
+  # parent may be considered, and it must be empty after deleting the video
+  # and its sidecar files.
+  for source_directory in "${DIRECTORY_PATHS[@]}"; do
+    [[ "${video_directory}" == "${source_directory}" ]] && return 1
+  done
+
+  if ! existing_entry="$(find "${video_directory}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"; then
+    return 1
+  fi
+  [[ -z "${existing_entry}" ]]
+}
+
+video_directory_only_has_sidecars() {
+  local video_path="$1"
+  local video_directory=""
+  local source_directory=""
+  local unsupported_entry=""
+
+  video_directory="$(dirname "${video_path}")"
+  [[ -d "${video_directory}" ]] || return 1
+
+  # Do not remove sidecars from a configured source root. They may belong to
+  # another item even when the selected video has just been deleted.
+  for source_directory in "${DIRECTORY_PATHS[@]}"; do
+    [[ "${video_directory}" == "${source_directory}" ]] && return 1
+  done
+
+  if ! unsupported_entry="$(find "${video_directory}" -mindepth 1 -maxdepth 1 \( ! -type f -o \( ! -iname '*.nfo' -a ! -iname '*.txt' \) \) -print -quit 2>/dev/null)"; then
+    return 1
+  fi
+  [[ -z "${unsupported_entry}" ]]
+}
+
+remove_video_sidecars() {
+  local video_path="$1"
+  local video_directory=""
+  local sidecar_path=""
+  local removed_count=0
+
+  video_directory_only_has_sidecars "${video_path}" || return 1
+  video_directory="$(dirname "${video_path}")"
+
+  while IFS= read -r -d '' sidecar_path; do
+    rm -f "${sidecar_path}" || return 1
+    removed_count=$((removed_count + 1))
+  done < <(find "${video_directory}" -mindepth 1 -maxdepth 1 -type f \( -iname '*.nfo' -o -iname '*.txt' \) -print0 2>/dev/null)
+
+  if [[ ${removed_count} -gt 0 ]]; then
+    echo -e "${DIM}Deleted ${removed_count} accompanying .nfo/.txt file(s).${NC}"
+  fi
+}
+
+prompt_to_remove_empty_video_directory() {
+  local video_path="$1"
+  local video_directory=""
+  local confirmation=""
+
+  video_directory_is_safe_to_remove "${video_path}" || return 0
+  video_directory="$(dirname "${video_path}")"
+
+  echo ""
+  echo -e "${YELLOW}The video's directory is now empty:${NC}"
+  echo -e "${DIM}${video_directory}${NC}"
+  echo -e -n "Delete this empty directory? [${RED}Y${NC}/${DIM}n${NC}]: "
+  if ! read_single_key confirmation; then
+    echo ""
+    return 0
+  fi
+  echo
+
+  case "${confirmation}" in
+    y | Y | $'\n' | "")
+      # rmdir is deliberately non-recursive, providing a final safeguard if
+      # anything appears in the directory after the emptiness check.
+      if rmdir "${video_directory}" 2>/dev/null; then
+        echo -e "${GREEN}Empty directory deleted.${NC}"
+      else
+        echo -e "${YELLOW}Directory was not deleted because it is no longer empty or accessible.${NC}"
+      fi
+      ;;
+    *)
+      echo -e "${DIM}Empty directory kept.${NC}"
+      ;;
   esac
 }
 
@@ -2040,6 +2201,13 @@ while true; do
               debug_log "Action: confirmed delete"
               if rm "${random_video}" 2>/dev/null; then
                 echo -e "${GREEN}File deleted.${NC}"
+                if video_directory_only_has_sidecars "${random_video}"; then
+                  if remove_video_sidecars "${random_video}"; then
+                    prompt_to_remove_empty_video_directory "${random_video}"
+                  else
+                    echo -e "${YELLOW}Could not remove all accompanying .nfo/.txt files; directory kept.${NC}"
+                  fi
+                fi
                 video_state="deleted"
               else
                 echo -e "${RED}Failed to delete file.${NC} Check permissions."

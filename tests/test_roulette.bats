@@ -419,6 +419,26 @@ create_test_videos() {
   [[ "${output}" =~ "Found 1 video" ]] || [[ "${output}" =~ "1 video" ]]
 }
 
+@test "roulette ignores videos inside .incomplete directories" {
+  local scan_dir="${TEST_TEMP_DIR}/incomplete_scan"
+  local incomplete_file="${scan_dir}/.incomplete/downloading.mp4"
+  local complete_file="${scan_dir}/complete.mp4"
+  mkdir -p "${scan_dir}/.incomplete"
+  touch "${incomplete_file}" "${complete_file}"
+
+  source_roulette_functions
+  # Exercise the portable find scanner as well as the shared playlist guard.
+  # shellcheck disable=SC2034 # Read by find_matching_videos.
+  ROULETTE_DISABLE_FD=1
+  SCANNABLE_DIRECTORY_PATHS=("${scan_dir}")
+
+  scan_videos_with_progress "Test scan"
+
+  [[ "${#SCANNED_VIDEOS[@]}" -eq 1 ]]
+  [[ "${SCANNED_VIDEOS[0]}" == "${complete_file}" ]]
+  run ! playlist_entry_is_selectable "${incomplete_file}"
+}
+
 @test "roulette --filter includes matching video files and all videos inside matching directories" {
   local filter_dir="${TEST_TEMP_DIR}/filter_root"
   local playlist_file=""
@@ -1205,6 +1225,30 @@ EOF
   [[ ! -s "${stderr_file}" ]]
 }
 
+@test "scan progress shows an active source while a scan is running" {
+  local scan_dir="${TEST_TEMP_DIR}/active_progress_scan"
+  local stderr_file="${TEST_TEMP_DIR}/active_progress_stderr.txt"
+  mkdir -p "${scan_dir}"
+
+  source_roulette_functions
+
+  SCANNABLE_DIRECTORY_PATHS=("${scan_dir}")
+  progress_output_enabled() { return 0; }
+  # shellcheck disable=SC2329 # Invoked indirectly by scan_videos_with_progress.
+  find_matching_videos() {
+    sleep 0.25
+    printf '%s\0' "${1}/clip.mp4"
+  }
+
+  scan_videos_with_progress "Scanning filters" 2>"${stderr_file}"
+
+  local progress_output
+  progress_output="$(<"${stderr_file}")"
+  [[ "${progress_output}" == *"Scanning filters"* ]]
+  [[ "${progress_output}" == *"source 1/1: ${scan_dir}"* ]]
+  [[ "${progress_output}" == *"complete | 1 videos found"* ]]
+}
+
 @test "video collection traverses each source only once" {
   local scan_dir="${TEST_TEMP_DIR}/single_pass_scan"
   local scan_calls_file="${TEST_TEMP_DIR}/single_pass_calls"
@@ -1430,6 +1474,58 @@ EOF
   [[ "${output}" =~ "Goodbye" ]] || [[ "${status}" -eq 0 ]] || [[ "${status}" -eq 124 ]]
 }
 
+@test "roulette removes .nfo and .txt sidecars before offering to remove an empty video directory" {
+  local source_dir="${TEST_TEMP_DIR}/delete_directory_source"
+  local video_dir="${source_dir}/single-video"
+  local test_file="${video_dir}/deleteme.mp4"
+  mkdir -p "${video_dir}"
+  touch "${test_file}"
+  touch "${video_dir}/metadata.nfo" "${video_dir}/notes.txt"
+
+  source_roulette_functions
+  DIRECTORY_PATHS=("${source_dir}")
+
+  run ! video_directory_is_safe_to_remove "${test_file}"
+  [[ "${status}" -eq 0 ]]
+  rm "${test_file}"
+  remove_video_sidecars "${test_file}"
+  video_directory_is_safe_to_remove "${test_file}"
+
+  # An empty response accepts the default directory-deletion choice.
+  # shellcheck disable=SC2329 # Invoked indirectly by the directory prompt.
+  read_single_key() { printf -v "$1" '%s' ''; }
+  prompt_to_remove_empty_video_directory "${test_file}"
+
+  [[ ! -d "${video_dir}" ]]
+  [[ -d "${source_dir}" ]]
+}
+
+@test "roulette never offers to remove source roots or non-empty video directories" {
+  local source_dir="${TEST_TEMP_DIR}/delete_directory_source_safety"
+  local root_video="${source_dir}/root.mp4"
+  local video_dir="${source_dir}/video-directory"
+  local nested_dir="${video_dir}/nested"
+  mkdir -p "${source_dir}"
+  touch "${root_video}"
+
+  source_roulette_functions
+  DIRECTORY_PATHS=("${source_dir}")
+
+  rm "${root_video}"
+  run ! video_directory_is_safe_to_remove "${root_video}"
+  [[ "${status}" -eq 0 ]]
+
+  mkdir -p "${nested_dir}"
+  run ! video_directory_is_safe_to_remove "${video_dir}/deleted.mp4"
+  [[ "${status}" -eq 0 ]]
+  [[ -d "${nested_dir}" ]]
+
+  rmdir "${nested_dir}"
+  touch "${video_dir}/other.mp4"
+  run ! video_directory_is_safe_to_remove "${video_dir}/deleted.mp4"
+  [[ "${status}" -eq 0 ]]
+}
+
 @test "roulette promote option moves video from downloads to main without re-adding playlist entry" {
   local downloads_dir="${TEST_TEMP_DIR}/promote_downloads"
   local main_dir="${TEST_TEMP_DIR}/promote_main"
@@ -1463,6 +1559,31 @@ EOF
   [[ ! -s "${playlist_file}" ]]
   grep -Fx "${expected_main_dir}/nested/clip.mp4" "${played_file}"
   run ! grep -Fx "${expected_downloads_dir}/nested/clip.mp4" "${played_file}"
+}
+
+@test "roulette promotion removes sidecars and offers to remove an empty source directory" {
+  local source_dir="${TEST_TEMP_DIR}/promote_cleanup_source"
+  local video_dir="${source_dir}/single-video"
+  local main_dir="${TEST_TEMP_DIR}/promote_cleanup_main"
+  local video_file="${video_dir}/clip.mp4"
+  local destination_file="${main_dir}/single-video/clip.mp4"
+  mkdir -p "${video_dir}" "${main_dir}"
+  touch "${video_file}" "${video_dir}/clip.nfo" "${video_dir}/clip.txt"
+
+  source_roulette_functions
+  DIRECTORY_PATHS=("${source_dir}")
+  # shellcheck disable=SC2034 # Read by promote_video_to_main.
+  PROMOTE_DOWNLOADS_PATH="${source_dir}"
+  # shellcheck disable=SC2034 # Read by promote_video_to_main.
+  PROMOTE_MAIN_PATH="${main_dir}"
+  PLAYLIST=("${video_file}")
+  save_state_files() { :; }
+  read_single_key() { printf -v "$1" '%s' ''; }
+
+  promote_video_to_main "${video_file}"
+
+  [[ -f "${destination_file}" ]]
+  [[ ! -d "${video_dir}" ]]
 }
 
 @test "roulette promote option accepts videos elsewhere in a configured source path" {
