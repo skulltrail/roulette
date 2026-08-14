@@ -1192,10 +1192,54 @@ EOF
   [[ "${DIRECTORY_PATHS[1]}" == "${expected_dir_b}" ]]
 }
 
+@test "default media paths include downloads and archive roots on macos wsl and linux" {
+  source_roulette_functions
+
+  # macOS
+  # shellcheck disable=SC2034
+  IS_MACOS=true
+  # shellcheck disable=SC2034
+  IS_WSL=false
+  run get_default_media_paths
+  [[ "${output}" =~ "/Volumes/media/downloads" ]]
+  [[ "${output}" =~ "/Volumes/media/archive/video" ]]
+  run get_default_downloads_paths
+  [[ "${output}" =~ "/Volumes/media/downloads" ]]
+  run get_default_main_paths
+  [[ "${output}" =~ "/Volumes/media/archive/video" ]]
+
+  # WSL
+  # shellcheck disable=SC2034
+  IS_MACOS=false
+  # shellcheck disable=SC2034
+  IS_WSL=true
+  run get_default_media_paths
+  [[ "${output}" =~ "/mnt/media/downloads" ]]
+  [[ "${output}" =~ "/mnt/media/archive/video" ]]
+  run get_default_downloads_paths
+  [[ "${output}" =~ "/mnt/media/downloads" ]]
+  run get_default_main_paths
+  [[ "${output}" =~ "/mnt/media/archive/video" ]]
+
+  # Linux
+  # shellcheck disable=SC2034
+  IS_MACOS=false
+  # shellcheck disable=SC2034
+  IS_WSL=false
+  run get_default_media_paths
+  [[ "${output}" =~ "/media/downloads" ]]
+  [[ "${output}" =~ "/media/archive/video" ]]
+  run get_default_downloads_paths
+  [[ "${output}" =~ "/media/downloads" ]]
+  run get_default_main_paths
+  [[ "${output}" =~ "/media/archive/video" ]]
+}
+
 @test "progress helpers stay quiet in non-interactive mode" {
   source_roulette_functions
 
-  run ! progress_output_enabled
+  run progress_output_enabled
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "scan progress helpers count matching videos" {

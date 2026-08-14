@@ -326,51 +326,59 @@ detect_media_directory() {
 }
 
 get_default_media_paths() {
-  if [[ "${IS_MACOS}" == true ]]; then
-    printf '%s\n' \
-      "/Volumes/media/downloads/video" \
-      "/Volumes/media/archive/video"
-  elif [[ "${IS_WSL}" == true ]]; then
-    printf '%s\n' \
-      "/mnt/media/archive/video" \
-      "/media/archive/video" \
-      "/mnt/m/media/archive/video"
-  else
-    printf '%s\n' \
-      "/media/archive/video" \
-      "/mnt/media/archive/video"
+  local downloads_path=""
+  local main_path=""
+
+  if downloads_path=$(get_default_downloads_paths | resolve_defined_path_from_candidates 2>/dev/null); then
+    printf '%s\n' "${downloads_path}"
+  fi
+
+  if main_path=$(get_default_main_paths | resolve_defined_path_from_candidates 2>/dev/null); then
+    printf '%s\n' "${main_path}"
   fi
 }
 
 get_default_downloads_paths() {
   if [[ "${IS_MACOS}" == true ]]; then
     printf '%s\n' \
-      "/Volumes/media/downloads/video"
+      "/Volumes/media/downloads/video" \
+      "/Volumes/media/downloads"
   elif [[ "${IS_WSL}" == true ]]; then
     printf '%s\n' \
       "/mnt/media/downloads/video" \
+      "/mnt/media/downloads" \
       "/media/downloads/video" \
-      "/mnt/m/media/downloads/video"
+      "/media/downloads" \
+      "/mnt/m/media/downloads/video" \
+      "/mnt/m/media/downloads"
   else
     printf '%s\n' \
       "/media/downloads/video" \
-      "/mnt/media/downloads/video"
+      "/media/downloads" \
+      "/mnt/media/downloads/video" \
+      "/mnt/media/downloads"
   fi
 }
 
 get_default_main_paths() {
   if [[ "${IS_MACOS}" == true ]]; then
     printf '%s\n' \
-      "/Volumes/media/archive/video"
+      "/Volumes/media/archive/video" \
+      "/Volumes/media/archive"
   elif [[ "${IS_WSL}" == true ]]; then
     printf '%s\n' \
       "/mnt/media/archive/video" \
+      "/mnt/media/archive" \
       "/media/archive/video" \
-      "/mnt/m/media/archive/video"
+      "/media/archive" \
+      "/mnt/m/media/archive/video" \
+      "/mnt/m/media/archive"
   else
     printf '%s\n' \
       "/media/archive/video" \
-      "/mnt/media/archive/video"
+      "/media/archive" \
+      "/mnt/media/archive/video" \
+      "/mnt/media/archive"
   fi
 }
 
@@ -1105,10 +1113,22 @@ serialize_path_for_storage() {
 
 # Known base path patterns across different platforms
 KNOWN_BASE_PATHS=(
+  "/Volumes/media/downloads/video"
+  "/Volumes/media/downloads"
   "/Volumes/media/archive/video"
+  "/Volumes/media/archive"
+  "/mnt/media/downloads/video"
+  "/mnt/media/downloads"
+  "/media/downloads/video"
+  "/media/downloads"
+  "/mnt/m/media/downloads/video"
+  "/mnt/m/media/downloads"
   "/mnt/media/archive/video"
+  "/mnt/media/archive"
   "/media/archive/video"
+  "/media/archive"
   "/mnt/m/media/archive/video"
+  "/mnt/m/media/archive"
 )
 
 # Convert relative path to absolute (for playback)

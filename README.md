@@ -128,11 +128,11 @@ The script attempts to automatically detect your media directory based on your e
 
 > Defaults are set to where I have all of my unsorted videos but can be easily changed.
 
-| Environment | Default Paths                                                                    |
-| ----------- | -------------------------------------------------------------------------------- |
-| macOS       | `/Volumes/media/downloads/video`, `/Volumes/media/archive/video`                 |
-| WSL         | `/mnt/media/archive/video`, `/media/archive/video`, `/mnt/m/media/archive/video` |
-| Linux       | `/media/archive/video`, `/mnt/media/archive/video`                               |
+| Environment | Default Paths                                                                                                                                                                                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS       | `/Volumes/media/downloads/video`, `/Volumes/media/downloads`, `/Volumes/media/archive/video`, `/Volumes/media/archive`                                                                                                                                         |
+| WSL         | `/mnt/media/downloads/video`, `/mnt/media/downloads`, `/media/downloads/video`, `/media/downloads`, `/mnt/m/media/downloads/video`, `/mnt/m/media/downloads`, `/mnt/media/archive/video`, `/mnt/media/archive`, `/media/archive/video`, `/media/archive`, `/mnt/m/media/archive/video`, `/mnt/m/media/archive` |
+| Linux       | `/media/downloads/video`, `/media/downloads`, `/mnt/media/downloads/video`, `/mnt/media/downloads`, `/media/archive/video`, `/media/archive`, `/mnt/media/archive/video`, `/mnt/media/archive`                                                             |
 
 You can modify the `detect_media_directory` function in `bin/roulette` to customize these paths.
 
