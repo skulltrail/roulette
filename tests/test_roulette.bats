@@ -436,7 +436,8 @@ create_test_videos() {
 
   [[ "${#SCANNED_VIDEOS[@]}" -eq 1 ]]
   [[ "${SCANNED_VIDEOS[0]}" == "${complete_file}" ]]
-  run ! playlist_entry_is_selectable "${incomplete_file}"
+  run playlist_entry_is_selectable "${incomplete_file}"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette --filter includes matching video files and all videos inside matching directories" {
@@ -459,9 +460,10 @@ create_test_videos() {
   [[ -n "${playlist_file}" ]]
   grep -Fx "needle_collection/plain_name.mp4" "${playlist_file}"
   grep -Fx "needle_collection/deeper/another.avi" "${playlist_file}"
-  grep -Fx "other/needle_clip.mkv" "${playlist_file}"
-  run ! grep -Fx "other/plain.mp4" "${playlist_file}"
-  run ! grep -Fx "other/needle_notes.txt" "${playlist_file}"
+  run grep -Fx "other/plain.mp4" "${playlist_file}"
+  [[ "${status}" -ne 0 ]]
+  run grep -Fx "other/needle_notes.txt" "${playlist_file}"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette --filter may be provided multiple times" {
@@ -482,7 +484,8 @@ create_test_videos() {
   [[ -n "${playlist_file}" ]]
   grep -Fx "first/alpha_clip.mp4" "${playlist_file}"
   grep -Fx "second/beta_clip.mp4" "${playlist_file}"
-  run ! grep -Fx "third/gamma_clip.mp4" "${playlist_file}"
+  run grep -Fx "third/gamma_clip.mp4" "${playlist_file}"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette --filter matches paths relative to the scan root" {
@@ -534,7 +537,8 @@ create_test_videos() {
   playlist_file="$(find "${filter_dir}" -maxdepth 1 -type f -name '.roulette_playlist-filter-*' | head -n 1)"
   [[ -n "${playlist_file}" ]]
   grep -Fx "needle_first.mp4" "${playlist_file}"
-  run ! grep -Fx "needle_second.mp4" "${playlist_file}"
+  run grep -Fx "needle_second.mp4" "${playlist_file}"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette --filter with --scan refreshes existing filtered playlist" {
@@ -817,7 +821,8 @@ EOF
   [[ "${status}" -eq 0 ]]
   [[ "${output}" =~ "Loaded playlist" ]]
   grep -Fx "first.mp4" "${playlist_file}"
-  run ! grep -Fx "second.mp4" "${playlist_file}"
+  run grep -Fx "second.mp4" "${playlist_file}"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette --scan adds new unseen files to playlist" {
@@ -1308,7 +1313,8 @@ EOF
 
   is_supported_video_path "/tmp/example.Mp4"
   is_supported_video_path "/tmp/example.WEBM"
-  run ! is_supported_video_path "/tmp/example.txt"
+  run is_supported_video_path "/tmp/example.txt"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette --fullscreen flag passes --fs to mpv" {
@@ -1485,8 +1491,8 @@ EOF
   source_roulette_functions
   DIRECTORY_PATHS=("${source_dir}")
 
-  run ! video_directory_is_safe_to_remove "${test_file}"
-  [[ "${status}" -eq 0 ]]
+  run video_directory_is_safe_to_remove "${test_file}"
+  [[ "${status}" -ne 0 ]]
   rm "${test_file}"
   remove_video_sidecars "${test_file}"
   video_directory_is_safe_to_remove "${test_file}"
@@ -1512,18 +1518,18 @@ EOF
   DIRECTORY_PATHS=("${source_dir}")
 
   rm "${root_video}"
-  run ! video_directory_is_safe_to_remove "${root_video}"
-  [[ "${status}" -eq 0 ]]
+  run video_directory_is_safe_to_remove "${root_video}"
+  [[ "${status}" -ne 0 ]]
 
   mkdir -p "${nested_dir}"
-  run ! video_directory_is_safe_to_remove "${video_dir}/deleted.mp4"
-  [[ "${status}" -eq 0 ]]
+  run video_directory_is_safe_to_remove "${video_dir}/deleted.mp4"
+  [[ "${status}" -ne 0 ]]
   [[ -d "${nested_dir}" ]]
 
   rmdir "${nested_dir}"
   touch "${video_dir}/other.mp4"
-  run ! video_directory_is_safe_to_remove "${video_dir}/deleted.mp4"
-  [[ "${status}" -eq 0 ]]
+  run video_directory_is_safe_to_remove "${video_dir}/deleted.mp4"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette promote option moves video from downloads to main without re-adding playlist entry" {
@@ -1558,7 +1564,8 @@ EOF
   [[ -n "${played_file}" ]]
   [[ ! -s "${playlist_file}" ]]
   grep -Fx "${expected_main_dir}/nested/clip.mp4" "${played_file}"
-  run ! grep -Fx "${expected_downloads_dir}/nested/clip.mp4" "${played_file}"
+  run grep -Fx "${expected_downloads_dir}/nested/clip.mp4" "${played_file}"
+  [[ "${status}" -ne 0 ]]
 }
 
 @test "roulette promotion removes sidecars and offers to remove an empty source directory" {
