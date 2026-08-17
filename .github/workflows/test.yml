@@ -64,9 +64,9 @@ jobs:
 
       - name: Generate test report
         run: |
-          bats tests/test_roulette.bats --formatter tap > test-report.tap
+          bats tests/*.bats --formatter tap > test-report.tap
           echo "## Test Results" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          bats tests/test_roulette.bats --count >> $GITHUB_STEP_SUMMARY
+          bats tests/*.bats --count >> $GITHUB_STEP_SUMMARY
           echo " tests completed" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

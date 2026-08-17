@@ -46,20 +46,15 @@ I built this out of a need to tackle my ever-growing video collection. With coun
 
 ## Installation
 
-1. Clone the repository:
+```bash
+git clone https://github.com/skulltrail/roulette.git
+cd roulette
+make symlink
+```
 
-   ```bash
-   git clone https://github.com/skulltrail/roulette.git
-   cd roulette
-   ```
+This creates a symbolic link at `~/.local/bin/roulette` pointing to the repository's `bin/roulette`. You can customize the destination directory using `BINDIR` or `PREFIX` (e.g., `make symlink BINDIR=/custom/bin` or `make symlink PREFIX=/opt`).
 
-   > **Tip:** If you use [direnv](https://direnv.net/), the included `.envrc` automatically adds `bin/` to your PATH while in the project directory so `roulette` should just work!
-
-2. (Optional) Add to your PATH permanently in your shell config (e.g., `~/.bashrc` or `~/.zshrc`):
-
-   ```bash
-   export PATH="$PATH:$(pwd)/bin"
-   ```
+> **Tip:** If you use [direnv](https://direnv.net/), the included `.envrc` automatically adds `bin/` to your PATH while working inside the project directory without symlinking.
 
 ## Usage
 
@@ -182,15 +177,16 @@ This will:
 ### Make Targets
 
 ```bash
-make help          # Show all available targets
-make setup         # Install dev tools and git hooks
-make check         # Run all pre-commit checks (lint + format check)
-make ci-local      # Run local equivalents of CI workflows before pushing
-make lint          # Run shellcheck on all shell files
-make format        # Format all shell files with shfmt
-make format-check  # Check formatting without modifying files
-make test          # Run tests
-make all           # Run all checks and tests
+make help               # Show all available targets
+make setup              # Install dev tools and git hooks
+make symlink            # Symlink roulette to ~/.local/bin/roulette (override with BINDIR/PREFIX)
+make check              # Run all pre-commit checks (lint + format check)
+make ci-local           # Run local equivalents of CI workflows before pushing
+make lint               # Run shellcheck on all shell files
+make format             # Format all shell files with shfmt
+make format-check       # Check formatting without modifying files
+make test               # Run tests
+make all                # Run all checks and tests
 ```
 
 ### Running Tests
