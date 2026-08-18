@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.0](https://github.com/skulltrail/roulette/compare/v1.4.0...v1.5.0) (2026-08-18)
+
+
+### Features
+
+* **build:** add symlink make target with test suite and ci runner support ([7ff92d3](https://github.com/skulltrail/roulette/commit/7ff92d3359a29231d3df33896e96439425918433))
+* enhance video scanning and directory management with progress indicators and sidecar removal ([7c031a0](https://github.com/skulltrail/roulette/commit/7c031a0fe00b41f156ecaf5c9d412022b961c5bd))
+* **paths:** expand default media directory detection to downloads and archive roots ([addf477](https://github.com/skulltrail/roulette/commit/addf4778b26e6109e27cd0f28107bea046256429))
+
 ## [1.4.0](https://github.com/skulltrail/roulette/compare/v1.3.1...v1.4.0) (2026-07-28)
 
 
